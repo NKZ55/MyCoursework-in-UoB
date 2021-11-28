@@ -1,0 +1,514 @@
+---
+title: "EDA to Improve Departure Delay"
+author: "Ningkai Zheng"
+output:
+  html_document:
+    theme: yeti
+    highlight: pygments
+    toc: yes
+    number_sections: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+# Introduction
+
+This is an exploratory data analysis for the __NYC Flights__, intending to improve departure delays. We provide several constructive suggestions at the end of the report.
+
+I could not contact my teammates in time as I was studying remotely, so this report was all done independently.
+
+## Load packages and helper functions
+```{r message=FALSE, warning=FALSE, results='hide'}
+library(tidyverse)
+library(xray)
+library(dlookr)
+library(scales)
+library(lubridate)
+library(corrplot)
+```
+
+Plus, we use the `multiplot` function, courtesy of [R Cookbooks](http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/) to create multi-panel plots.
+
+```{r, include=FALSE}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+## Load data
+
+We got the following data sets to analyse the departure delay from several dimensions.
+
+```{r}
+flights=read.csv("flights.csv")
+airports=read.csv("airports.csv")
+airlines=read.csv("airlines.csv")
+planes=read.csv("planes.csv")
+weather=read.csv("weather.csv")
+```
+
+## Overview of the data
+```{r message=FALSE, warning=FALSE, results='hide'}
+summary(flights)
+summary(airports)
+summary(airlines)
+summary(planes)
+summary(weather)
+```
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+glimpse(flights)
+glimpse(airports)
+glimpse(airlines)
+glimpse(planes)
+glimpse(weather)
+```
+
+- `flights` contains the majority of useful information we will analyse, while other data sets are linked to it by several keywords.
+- `airports` and `flights` are connected by `faa` (`origin, dest` in `flights`).
+- `airlines` and `flights` are connected by `carrier`.
+- `planes` and `flights` are connected by `tailnum`.
+- `weather` and `flights` are connected by `origin` and `time_hour`.
+- The departure delay range from -43 to 1301 minutes.
+
+## Find problematic variables
+```{r message=FALSE, warning=FALSE, results='hide'}
+xray::anomalies(flights)
+xray::anomalies(airports)
+xray::anomalies(planes)
+xray::anomalies(weather)
+xray::anomalies(airlines)
+```
+
+Using `anomalies()` function, we find that `year` in `flights`, `speed` in `planes`, and `precip` and `year` in `weather` seem to be problematic variables.
+
+- `year` in `flights` and `weather` is detected as a problematic variable because it only has one distinct value, which is `2013`. This is not an issue but a hint  about the year of flights and weather we are going to analyse.
+- Around 99.31% of values in the `speed` column in `planes` are NA, which means we are not able to find the relationship between the cruising speed of planes and departure delays. But this won't affect other analyses.
+- Around 93.3% of values in the `precip` column in `weather` are zero, which is quite normal because this only indicates no precipitation.
+- We can also notice that `minute` in `flights` has 18% of zero values, which suggests the flights scheduled to depart on the hour. Plus, 79.56% of the variable `wind_gust` in `weather` have NA values, which will limit the analysis of the relationship between gust speed and departure delay.
+
+## Find outliers
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+diagnose_outlier(flights)
+diagnose_outlier(airports)
+diagnose_outlier(planes)
+diagnose_outlier(weather)
+```
+
+Although some variables have outliers, such as `dep_delay` and `arr_delay`, we will not remove these outliers because it’s essential to use extreme values to analyse the causation of departure delay.
+
+# Influence of airports
+
+The departure delay can be affected by the origin airports. There are total 3 distinct origin airports as shown in the `anomalies()` by qDistinct.
+
+Let's start with a general overview of the flights and departure delays at each of the three airports.
+
+```{r}
+flights %>%
+  group_by(origin) %>%
+  tally()
+```
+
+__Total number of flights:__ EWR > JFK > LGA.
+
+```{r}
+flights %>%
+  ggplot(aes(x=dep_delay)) +
+  geom_histogram(fill="yellow",binwidth=50,color="grey") +
+  facet_wrap(~origin) +
+  labs(x="Departure delay", y="Flights count") +
+  theme_bw(base_line_size=0)
+```
+
+Happily, most flights in the three airports were not delayed. 
+
+Do different airports behave differently concerning delayed flights? Let's filter out the undelayed flights and plot the graph again.
+
+```{r}
+flights %>%
+  filter(dep_delay>0) %>%
+  ggplot(aes(x=dep_delay)) +
+  geom_histogram(fill="yellow",binwidth=50,color="grey") +
+  facet_wrap(~origin) +
+  labs(x="Departure delay", y="Flights count") +
+  theme_bw(base_line_size=0)
+```
+
+Departure delays of the three airports show a similar distribution, while the amount of delayed flights varies considerably among the airports, as shown below.
+
+```{r}
+flights %>%
+  group_by(origin,dep_delay>0) %>%
+  tally()
+```
+
+__The amount of delayed flights:__ EWR(52414) > JFK(41833) > LGA(33498).
+
+But where the total number of flights varies, it is not reasonable to use absolute numbers for comparison. Let's go deeper into the percentage of delayed flights of each airport.
+
+```{r}
+flights %>%
+  group_by(origin,dep_delay>0) %>%
+  tally() %>%
+  mutate(percentage=percent(n/sum(n)))
+```
+
+__The percentage of delayed flights:__ EWR(45%) > JFK(38%) > LGA(33%).
+
+It can be seen that there is a correlation between delays and the total number of flights. In other words, the occurrence of departure delays may depend on how busy the airport is. We will further analyse the influence of busyness across time.
+
+# Influence of busyness
+
+## Busyness across a day
+
+Let's compare the total number of flights and the total number of departure delays for each hourly period during the year.
+
+```{r}
+(p_total=flights %>%
+  group_by(hour,origin) %>%
+  tally() %>%
+  ggplot(aes(hour,n,color=origin)) +
+  geom_point(size=4,alpha=0.7) +
+  labs(x="Hour of a day",y="Number of flights") +
+  scale_x_continuous(breaks=seq(0,24,by=1)) +
+  scale_color_manual(values=c("#FF665A","#7D6B7D","#FFF587")) +
+  theme_bw() +
+  theme(legend.title=element_blank(),legend.position="top"))
+```
+
+Flights are scheduled between 5 am and 11 pm.
+
+The trend of flights across a day:
+From 5 am to 6 am, the flights increase sharply and reach the summit at 6 am, after which the flights gradually decrease until 11 am and then slowly increase until 5 pm, followed by a rapid decrease to the end of the day.
+
+```{r, fig.cap="Figure 1"}
+flights_hour=flights %>%
+  group_by(hour,origin) %>%
+  tally()
+
+flights_hour_delay=flights %>%
+  filter(dep_delay>0) %>%
+  group_by(hour,origin) %>%
+  tally()
+
+merge_hour=left_join(flights_hour,flights_hour_delay,by=c("hour","origin"))
+
+p_total=p_total +
+  coord_cartesian(ylim=c(0,12000))
+
+p_percent=merge_hour %>%
+  mutate(percent_delay=(n.y/n.x)) %>%
+  ggplot(aes(hour,percent_delay,color=origin)) +
+  geom_point(size=4,alpha=0.7) +
+  labs(x="Hour of a day",y="Percent of delayed flights") +
+  scale_x_continuous(breaks=seq(0,24,by=1)) +
+  scale_y_continuous(labels=percent) +
+  coord_cartesian(ylim=c(0,0.7)) +
+  scale_color_manual(values=c("#FF665A","#7D6B7D","#FFF587")) +
+  theme_bw() +
+  theme(legend.position="none")
+
+layout=matrix(c(1,2),2,1,byrow=FALSE)
+multiplot(p_total,p_percent,layout=layout)
+```
+
+There is __no clear link__ between the total number of flights and the percentage of delayed flights across a day. We will be able to analyse the effect of busyness more accurately when we have access to data on the number of flights arriving at these airports.
+
+However, we notice that the proportion of delayed flights tends to __increase gradually over the day__. This may be due to the accumulation of flight problems that are not resolved promptly throughout the day.
+
+# Seasonal infuences
+
+The trend in flight departure delays over the year.
+
+```{r}
+(p1=flights %>%
+  mutate(flight_date=ymd_hms(time_hour)) %>%
+  ggplot(aes(flight_date,fill=(dep_delay>0))) +
+  geom_histogram(bins=120,color="black") +
+  labs(x="Year 2013",y="Flights") +
+  theme_bw() +
+  scale_fill_discrete(labels=c("Not delayed","Delayed")) +
+  theme(legend.position = "top", legend.title=element_blank()))
+```
+
+We note that the percentage of delayed flights is high in July and December and decreases between September and November, indicating that seasonal influences do exist.
+
+We got the `weather` data to analyse seasonal influences.
+
+## Merge the data
+
+```{r}
+weather_to_merge=weather[,c(1,9,10,12,14,15)]
+
+merge_flights=left_join(flights,weather_to_merge,
+                        by=c("origin","time_hour"))
+
+merge_flights=na.omit(merge_flights,col=c("precip","visib",
+                                          "wind_dir","wind_speed"))
+```
+
+Correlation overview
+```{r}
+merge_flights %>%
+  select(dep_delay,precip,visib,wind_dir,wind_speed) %>%
+  cor() %>%
+  corrplot(type="lower",tl.srt=45,tl.col=1)
+```
+
+Among the weather factors, the precipitation and visibility are two possible factors that can significantly affect the departure delay.
+
+## Influence of precipitation and visibility
+
+Plot the precipitation and visibility across the year, and compare it with the flights across the year.
+
+```{r warning=FALSE}
+p1=p1 +
+  theme(legend.position="none") +
+  labs(x=NULL)
+
+p2=weather %>%
+  mutate(month_day=ymd(paste(year,month,day,sep="/"))) %>%
+  group_by(month_day) %>%
+  ggplot(aes(x=month_day,y=precip,fill=origin)) +
+  geom_histogram(stat="identity") +
+  labs(x="Year 2013",y="Precipitation") +
+  scale_x_date(breaks=date_breaks("1 month"),labels=date_format("%m-%d")) +
+  scale_fill_manual(values=c("#FF665A","#7D6B7D","#FFF587")) +
+  theme_bw() +
+  theme(legend.position="none")
+
+layout=matrix(c(1,2),2,1,byrow=FALSE)
+multiplot(p1,p2,layout=layout)
+```
+
+```{r warning=FALSE}
+p3=weather %>%
+  mutate(month_day=ymd(paste(year,month,day,sep="/")),
+         visibility=(10-visib)) %>% # make the graph more clear
+  group_by(month_day) %>%
+  ggplot(aes(x=month_day,y=visibility,fill=origin)) +
+  geom_histogram(stat="identity") +
+  labs(x="Year 2013",y="Counter Visibility") +
+  scale_x_date(breaks=date_breaks("1 month"),labels=date_format("%m-%d")) +
+  scale_fill_manual(values=c("#FF665A","#7D6B7D","#FFF587")) +
+  theme_bw() +
+  theme(legend.position="none")
+
+layout=matrix(c(1,2),2,1,byrow=FALSE)
+multiplot(p1,p3,layout=layout)
+```
+
+We can observe a correlation between weather condition and the percentage of delayed flights. The less rainfall or the better the visibility, the lower the percentage of flight delays will be. And only prolonged periods of good weather can significantly impact the percentage of flight delays, which can explain the drop in the percentage of flight delays between September and November. With the ever-changing weather, brief periods of good weather have very little effect on the percentage of flight delays. (The *Delayed Percent vs Weather* sheet in Tableau presents this relationship more clearly)
+
+## Measures already in place
+
+```{r, fig.cap="Figure 2"}
+visibimage=merge_flights %>%
+  group_by(visib) %>%
+  tally() %>%
+  ggplot(aes(visib,n)) +
+  geom_point() +
+  labs(x="Visibility",y="Flights count") +
+  theme_bw()
+
+precipimage=merge_flights %>%
+  group_by(precip) %>%
+  tally() %>%
+  ggplot(aes(precip,n)) +
+  geom_point()+
+  labs(x="Precipitation",y="Flights count") +
+  theme_bw()
+
+layout=matrix(c(1,2),2,1,byrow=FALSE)
+multiplot(visibimage,precipimage,layout=layout)
+```
+
+Most of the flights were scheduled in periods with visibility=10 and precipitation=0.
+
+We can conclude that the airline systems were using accurate weather forecasting systems and scheduling appropriate flights according to it, which they are supposed to keep in the future.
+
+When it comes to the airline system, the impact of the carrier is significant. We are going to analyse the difference in departure delay among the carriers.
+
+# Influence of carrier
+
+First, we need to know the flights per carrier.
+
+```{r}
+flights %>%
+  group_by(carrier) %>%
+  tally() %>%
+  ggplot(aes(x=reorder(carrier,n),y=n)) +
+  geom_bar(stat="identity") +
+  geom_text(aes(label=n),nudge_y=2500) +
+  labs(x="Carrier",y="Number of flights") +
+  coord_flip() +
+  theme_bw()
+```
+
+Then, find the percentage of delays for each carrier.
+
+```{r}
+flight_carrier=flights %>%
+  group_by(carrier) %>%
+  tally()
+
+flight_carrier_delay=flights %>%
+  filter(dep_delay>0) %>%
+  group_by(carrier) %>%
+  tally()
+
+merge_carrier=left_join(flight_carrier,flight_carrier_delay,by="carrier")
+
+merge_carrier[is.na(merge_carrier)]=0
+
+(merge_carrier=merge_carrier %>%
+  mutate(percent_delay=percent(n.y/n.x)) %>%
+  arrange(percent_delay))
+```
+
+Plot the box plot of departure delay for each carrier and highlight the carriers with a large number of flights and a relatively small percentage of delays.
+
+```{r, fig.cap="Figure 3"}
+flights %>%
+  ggplot(aes(y=carrier,x=dep_delay,
+             color=carrier %in% c("US", "AA", "MQ", "DL"))) +
+  geom_boxplot(outlier.alpha=0.1) +
+  labs(y="Carrier",x="Departure delay") +
+  theme_bw(base_line_size=0) +
+  scale_color_discrete(labels=c("Others","More flights and less delays")) +
+  theme(legend.position="top", legend.title=element_blank())
+```
+
+According to the table and graph, US perform the best and most stable in departure delay, while MQ, DL and AA should control the maximum length of delays, and WN, VX, EV, B6 and 9E should focus on reducing the percentage of departure delays.
+
+# Influence of plane
+
+First, have an overview of the data set `planes`.
+```{r warning=FALSE}
+xray::distributions(planes)
+```
+
+Different planes are of different types, engines, year of manufactured, etc. According to the `distributions()`, the type and engine number of almost all planes in the data are the same. The variable we can analyse is year of manufactured and seat number, which may affect the checking time before departure and eventually influence departure delay.
+
+Merge the data.
+
+```{r}
+planes_to_merge=planes[,c(1,2,7)]
+colnames(planes_to_merge)[2]="yearmanufactured"
+merge_flights2=left_join(flights,planes_to_merge,by="tailnum")
+merge_flights2=na.omit(merge_flights2,col=c("yearmanufactured","seats"))
+```
+
+## Influence of year manufactured
+
+Older planes may require a longer checking time before departure.
+
+```{r}
+flight_manuf=merge_flights2 %>%
+  group_by(yearmanufactured) %>%
+  tally()
+
+flight_manuf_delay=merge_flights2 %>%
+  filter(dep_delay>0) %>%
+  group_by(yearmanufactured) %>%
+  tally()
+
+merge_manuf=left_join(flight_manuf,flight_manuf_delay,by="yearmanufactured")
+
+merge_manuf[is.na(merge_manuf)]=0
+
+merge_manuf %>%
+  mutate(percent_delay=n.y/n.x) %>%
+  ggplot(aes(x=yearmanufactured,y=percent_delay,size=n.x)) +
+  geom_point(alpha=0.5) +
+  labs(x="Year manufactured", y="Delayed %") +
+  theme_bw() +
+  scale_x_continuous(breaks=seq(1956,2013,by=5)) +
+  theme(legend.position="none")
+```
+
+The percentage of delayed flights does not have a strong relationship with the year manufactured of the plane. Meanwhile, we notice that some older planes with a similar number of flights to new planes have a smaller percentage of delays, which is counter-intuitive.
+
+Combined with Tableau, we find that even for planes built during the same period, carriers have considerable differences in performance (See *Carrier's Plane Year* sheet in Tableau). The poorer performing planes in the chart above are used heavily by the carriers as the poor performers. As we cannot think of any other reason for the new produced planes to have a higher percentage of flight delays, we suspect that the carriers are likely to be the real reason behind this. Of course, with the aid of professionals from the client company, we will be able to draw more accurate conclusions.
+
+## Influence of seat number (i.e. plane size)
+
+Bigger planes may require a longer checking time and passengers may take longer to board before departure.
+
+```{r}
+flight_seat=merge_flights2 %>%
+  group_by(seats) %>%
+  tally()
+
+flight_seat_delay=merge_flights2 %>%
+  filter(dep_delay>0) %>%
+  group_by(seats) %>%
+  tally()
+
+merge_seat=left_join(flight_seat,flight_seat_delay,by="seats")
+
+merge_seat[is.na(merge_seat)]=0
+
+merge_seat %>%
+  mutate(percent_delay=n.y/n.x) %>%
+  ggplot(aes(x=seats,y=percent_delay,size=n.x)) +
+  geom_point(alpha=0.5) +
+  labs(x="Seat number", y="Delayed %") +
+  theme_bw() +
+  theme(legend.position="none")
+```
+
+Relationship between the percentage of delayed flights and the seat number is not clear. We use Tableau to precisely analyse each seat count and still conclude that the carrier is the actual cause (See *Carrier's Plane Seat* sheet in Tableau).
+
+# Suggestions to PANYNJ
+
+__Effect of busyness__. Although the percentage of departure delays at each of the three airports respectively correspond to their total number of flights, in subsequent in-depth studies, we did not find a strong correlation between the percentage of departure delays and the busyness of the airports. We need __information on arrivals at the three airports__ to explore this matter more accurately. However, we have seen an increasing trend in the percentage of flight delays throughout the day (*Figure 1*), we therefore recommend that when airports encounter problems with departure delays, in addition to __taking action as soon as possible__, they should also consider trying __not to disrupt flights in the next slot__. In the Tableau Dashboard, we can explore how each carrier deals with flight delays across the day.
+
+__Effect of weather__. The proportion of flight delays declined during long periods of low rainfall and high visibility. To their credit, the airports and carriers __have done a great job with the weather impact on flights__, with most flights being scheduled in times of good visibility and no rainfall (*Figure 2*). 
+
+__Effect of carrier__. US performs the best and most stable departure delay (*Figure 3*). Combined with the analysis of the dashboard in Tableau, we find that the percentage of delays varies from one destination airport to another. As UA and WN do not control their percentage of delays well, some destination airports with a higher volume of flights have a higher percentage of delays than others. US and AA airlines, on the other hand, have reduced the percentage of delays at some destination airports. Overall, we recommend PANYNJ to work more intensively with __US and AA Airways__, and conduct a reasonable distribution of flights from good and bad carriers for different destinations.
