@@ -4,6 +4,6 @@
 
 Original datasets are provided by professors from the UoB.
 
-All work is done independently by me.
+All work is done independently by myself.
 
 Please click the "main" button to see the branches.
