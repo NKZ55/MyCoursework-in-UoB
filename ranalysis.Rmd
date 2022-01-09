@@ -1,0 +1,1708 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: Ningkai Zheng
+---
+
+```{r}
+library(Mcomp)
+library(forecast)
+library(ggplot2)
+library(tseries)
+library(imputeTS)
+library(tidyverse)
+```
+
+
+
+#Part1: Manual modelling
+
+```{r}
+M3[[1903]]
+h=M3[[1903]]$h
+y=M3[[1903]]$x
+yout=M3[[1903]]$xx
+M3[[1903]]$n
+
+autoplot(y)+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  theme_bw(base_line_size = 0)
+```
+
+We can observe a strong seasonal observation through this graph.
+
+The variance of the data is quite stable, so we do not need to transform the data.
+
+To exclude the simple calendar effects, we compare the monthly data to the daily data.
+
+```{r}
+dframe=cbind(Monthly = y, DailyAverage=y/monthdays(y))
+
+autoplot(dframe, facet=TRUE)+
+  xlab("Years")+
+  ylab("Rooms occupied")+
+  theme_bw(base_line_size = 0)
+```
+
+The seasonal pattern in the daily plot does not appear to be simpler than the monthly one, but rather more complex over some periods. So we will continue with the monthly data.
+
+Let's decompose the data to improve our understanding of the time series. As the variation in the seasonal pattern hardly change across time, we assume that it is additive.
+
+```{r}
+y %>% 
+  decompose() %>%
+  autoplot() +
+  xlab("Year") +
+  ggtitle("") +
+  theme_bw(base_line_size = 0)
+```
+
+We can observe a decreasing trend through this graph, which is not obvious in the original data.
+
+There are some abnormal sink in the trend, which is caused by sharp shrink of rooms occupied in July and August 1980, February 1982 and September 1987.
+
+To detect outliers accurately.
+
+```{r}
+tsoutliers(y)
+```
+
+We set data in these period to be NA.
+
+```{r}
+out=tsoutliers(y)
+adjy=y
+
+for (o in out$index){
+  adjy[o]=NA
+}
+
+```
+
+then, replace them with appropriate value.
+
+```{r}
+adjy=na_kalman(adjy)
+```
+
+```{r}
+adjy %>% 
+  decompose() %>%
+  autoplot() +
+  xlab("Year") +
+  ggtitle("") +
+  theme_bw(base_line_size = 0)
+```
+
+The variance in the remainder is much less than the variance in the data.
+
+
+## Regression model
+
+
+### Include outliers
+
+```{r}
+fit.reg1=tslm(y ~ trend+season)
+summary(fit.reg1)
+```
+
+p-values of the t statistics are less than 0.05, except for season11, and p-value of the F statistics is much less than 0.05, indicating the model has some predictive power. As the R-squared is equal to 0.8047, which means 80.47% of the variation in the rooms occupied in motor hotels can be explained by this model.
+
+I.
+```{r}
+checkresiduals(fit.reg1,lag=36,theme=theme_bw(base_line_size = 0))
+```
+
+Investigate for autocorrelation over 3 years of monthly data.
+
+According to the ACF plot and large p-value of Breusch-Godfrey test, there is no autocorrelation in the residuals.
+
+N.
+```{r}
+cbind(Data=y, Fitted=fitted(fit.reg1)) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Data, y=Fitted))+
+  geom_point()+
+  geom_abline(intercept=0,slope=1)+
+  theme_bw(base_line_size = 0)
+```
+
+E.
+```{r}
+cbind(Fitted=fitted(fit.reg1), Residuals=residuals(fit.reg1)) %>%
+  as.data.frame() %>%
+  ggplot(aes(x=Fitted, y=Residuals)) +
+  geom_point()+
+  theme_bw(base_line_size = 0)
+```
+
+
+A plot of the residuals against the fitted values shows no pattern, which means the residuals are homoscedastic.
+
+There are some outliers in above graphs, which correspond to the 4 abnormal months mentioned in the decomposition part.
+
+```{r}
+accuracy(fit.reg1)
+```
+
+
+```{r}
+autoplot(y, series="Observed value")+
+  autolayer(fitted(fit.reg1),series="Fitted value")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("")+
+  guides(color=guide_legend(title=""))+
+  scale_color_manual(values=c("blue","black"))+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "bottom")
+```
+
+```{r}
+CV(fit.reg1)
+```
+
+
+```{r}
+fc=forecast(fit.reg1,h=h,level=c(80,90,95,99))
+fc
+accuracy(fc,yout)
+autoplot(fc)+
+  autolayer(M3[[1903]]$xx, color="black")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("")+
+  guides(color=guide_legend(title=""))+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "none")
+```
+
+It can be seen that during the forecasting period, rooms occupied of motor hotels increased, which does not align with its trend in the historical data, but the observed values almost lie in 90% confidence level of prediction interval. The prediction interval also indicates that values around valley are easier to be predicted than values around peak.
+
+Let's remove trend from the model as it's variation is not significant compared to the original data according to the decomposition graph, and it's misleading when forecasting the future data.
+
+```{r}
+fit.reg2=tslm(y ~ season)
+summary(fit.reg2)
+```
+
+```{r}
+checkresiduals(fit.reg2, lag=36)
+```
+
+
+
+```{r}
+CV(fit.reg2)
+```
+
+```{r}
+autoplot(y, series="Observed value")+
+  autolayer(fitted(fit.reg2),series="Fitted value")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("Motor Hotel Room Usage")+
+  guides(color=guide_legend(title=""))
+```
+
+
+```{r}
+fc2=forecast(fit.reg2,h=h,level=c(80,90,95,99))
+fc2
+accuracy(fc2,yout)
+autoplot(fc2)+
+  autolayer(M3[[1903]]$xx, color="black")+
+  ggtitle("")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "none")
+```
+
+This model has more accurate forecasts in terms of this specific future period but the first model has lower AICc, AIC, BIC，CV and higher adjusted R-squared. The first regression model is better.
+
+### Exclude outliers
+
+```{r}
+fit.reg3=tslm(adjy ~ trend+season)
+summary(fit.reg3)
+```
+
+```{r}
+checkresiduals(fit.reg3, lag=36)
+```
+
+```{r}
+CV(fit.reg3)
+```
+
+This model has much lower AICc, AIC, BIC, CV and higher adjusted R-squared.
+
+```{r}
+autoplot(y, series="Observed value")+
+  autolayer(fitted(fit.reg3),series="Fitted value")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("Motor Hotel Room Usage")+
+  guides(color=guide_legend(title=""))
+```
+
+```{r}
+fc3=forecast(fit.reg3,h=h,level=c(80,90,95,99))
+fc3
+accuracy(fc3,yout)
+autoplot(fc3, series="Forecast")+
+  autolayer(M3[[1903]]$xx, series="Observed")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("Motor Hotel Room Usage")+
+  guides(color=guide_legend(title=""))
+```
+
+The prediction interval is much narrow in this model as outliers are removed. For this specific future period, some observed values are even out of 99% confidence level of prediction interval. But we can not select model based on this specific forecasting period, this model is indeed better since it has better performance in the training data.
+
+
+```{r}
+fit.reg4=tslm(adjy ~ season)
+summary(fit.reg3)
+```
+
+```{r}
+CV(fit.reg4)
+```
+
+
+```{r}
+checkresiduals(fit.reg4, lag=36)
+```
+
+Autocorrelation of the residuals. Too good to be true. 
+
+```{r}
+fc4=forecast(fit.reg4,h=h,level=c(80,90,95,99))
+fc4
+accuracy(fc4,yout)
+autoplot(fc4, series="Forecast")+
+  autolayer(M3[[1903]]$xx, series="Observed")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("Motor Hotel Room Usage")+
+  guides(color=guide_legend(title=""))
+```
+
+
+Above all, the third regression model is the best from the technical perspective, but as we do not know the real reasons behind the outliers, we are not sure if the outliers are caused by random events or not, it's not wise to exclude them from the model, so we will choose the first model to forecast future data.
+
+In the subsequent analysis, we will only use original data to generate the forecast model.
+
+As the data are collected forward, we may realize the increase in this specific forecasting period is just a disturbance or not.
+ 
+## Exponential smoothing model
+
+As the data has strong seasonality, we will start with ETS(A,N,A).
+
+```{r}
+fit.es1=ets(y, model="ANA", damped = FALSE)
+summary(fit.es1)
+```
+
+```{r}
+checkresiduals(fit.es1, lag=36)
+```
+
+
+
+p-value of the Ljung-Box test is over 0.05, suggesting that residuals are not autocorrelated.
+
+```{r}
+fit.es2=ets(y, model="MNA", damped = FALSE)
+summary(fit.es2)
+```
+
+```{r}
+checkresiduals(fit.es2, lag=36, theme=theme_bw(base_line_size = 0))
+```
+
+Lower AIcc.
+
+```{r}
+fit.es3=ets(y, model="MNM", damped = FALSE)
+summary(fit.es3)
+```
+
+```{r}
+checkresiduals(fit.es3, lag=36)
+```
+
+Higher AIcc than previous one.
+
+```{r}
+fit.es4=ets(y, model="MAA", damped = FALSE)
+summary(fit.es4)
+```
+
+```{r}
+checkresiduals(fit.es4, lag=36)
+```
+
+```{r}
+fit.es5=ets(y, model="MAA", damped = TRUE)
+summary(fit.es5)
+```
+
+AICc is lower than the undamped one, but higher than the second model.
+
+Higher AICc than the second one. p-value of the Ljung-Box test is below 0.05, suggesting that residuals are autocorrelated.
+
+```{r}
+fit.es6=ets(y, model="MMM", damped = F)
+summary(fit.es6)
+```
+
+```{r}
+fit.es7=ets(y, model="MMM", damped = T)
+summary(fit.es7)
+```
+
+The second model is the best among these models according to AICc.
+
+Since the second model indicates no trend, we do not need to further study the dampening version.
+
+
+
+
+```{r}
+autoplot(y, series="Observed value")+
+  autolayer(fitted(fit.es2),series="Fitted value")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("")+
+  guides(color=guide_legend(title=""))+
+  scale_color_manual(values=c("blue","black"))+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "bottom")
+```
+
+```{r}
+fcs1=forecast(fit.es2,h=h,level=c(80,90,95,99))
+fcs1
+accuracy(fcs1,yout)
+autoplot(fcs1)+
+  autolayer(M3[[1903]]$xx,color="black")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("")+
+  guides(color=guide_legend(title=""))+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "none")
+```
+
+```{r}
+fcs2=forecast(fit.es7,h=h,level=c(80,90,95,99))
+fcs2
+accuracy(fcs2,yout)
+```
+
+
+Compared to the regression model, the observed values almost lie in 80% confidence level of prediction interval, suggesting this model has stronger predictive power for this specific period.
+
+## ARIMA model
+
+```{r}
+tsdisplay(y)
+adf.test(y)
+```
+
+Although the result of ADF test suggests stationarity, we know that time series with seasonality are not stationary.
+
+Since the data have a strong seasonal pattern, let's implement seasonal difference first. (fpp8.1 p300)
+
+```{r}
+nsdiffs(y)
+dy=diff(y,12)
+tsdisplay(dy,main="")
+```
+
+The ACF drop to zero relatively quickly, indicating the time series is stationary now.
+
+```{r}
+adf.test(dy)
+```
+
+The ADF test also suggests stationarity.
+
+The seasonal difference is depicted as follows.
+
+```{r}
+cbind("Original data"=y, "Seasonal difference"=dy) %>%
+  autoplot(facets=TRUE) +
+  xlab("Year") +
+  ylab("Rooms occupied") +
+  ggtitle("") +
+  theme_bw(base_line_size = 0)
+```
+
+D=1, d=0
+
+According to the ACF and PACF plots, we observe that:
+
+- In the ACF plot, we see that there are two significant spikes, followed by an almost significant spike at lag 3 (apart from one outside the bounds at lag 18), suggesting a non-seasonal MA(3) component. There is a significant spike in the ACF at lag 12, which may indicates a seasonal MA(1) term.
+
+- There are significant spikes and almost spikes in the PACF at lags 12, 24 and 36 (apart from one outside the bounds at lag 13). This may suugestive of a seasonal AR(3) term. The significant spike at lag 1 in the PACF suggests a non-seasonal AR(1) component.
+
+Thus, we will consider following models:
+
+- ARIMA(0,0,3)(0,1,1)[12]
+- ARIMA(1,0,0)(3,1,0)[12]
+
+And their variations (Add or subtract 1 of the p,q,P,Q).
+
+```{r}
+fit.ari1=Arima(y, order=c(0,0,3), seasonal=c(0,1,1))
+summary(fit.ari1)
+```
+
+```{r}
+fit.ari2=Arima(y, order=c(1,0,0), seasonal=c(3,1,0))
+summary(fit.ari2)
+```
+
+The second one has lower AICc and AIC, so we will consider the second one further.
+
+```{r}
+fit.ari3=Arima(y, order=c(1,0,0), seasonal=c(2,1,0))
+summary(fit.ari3)
+```
+
+Lower AICc.
+
+```{r}
+fit.ari4=Arima(y, order=c(1,0,0), seasonal=c(2,1,2))
+summary(fit.ari4)
+```
+
+Lower AICc.
+
+```{r}
+fit.ari4=Arima(y, order=c(1,0,0), seasonal=c(1,1,2))
+summary(fit.ari4)
+```
+
+Lower AICc. Can't find a model with lower AICc than the fifth one by simply add or subtract one to two of p,q,P,Q. Its MASE = 68.72%, meaning it's better than the naïve method, so it's worth considering this model.
+
+Since D = 1, we need to set include.drift = TRUE to explore a model with a constant.
+
+```{r}
+fit.ari5=Arima(y, order=c(1,0,0), seasonal=c(1,1,2), include.drift=TRUE)
+summary(fit.ari5)
+```
+
+Lower AICc!
+
+
+```{r}
+checkresiduals(fit.ari5, lag=36, theme=theme_bw(base_line_size = 0))
+```
+
+All the spikes are within the significance limits, and p-value are relatively large, so we can conclude that the residuals are not distinguishable from a white noise series.
+
+```{r}
+autoplot(y, series="Observed value")+
+  autolayer(fitted(fit.ari5),series="Fitted value")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("")+
+  guides(color=guide_legend(title=""))+
+  scale_color_manual(values=c("blue","black"))+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "bottom")
+```
+
+```{r}
+fore=forecast(fit.ari5,h=h,level=c(80,90,95,99))
+fore
+accuracy(fore,yout)
+autoplot(fore)+
+  autolayer(M3[[1903]]$xx, color="black")+
+  xlab("Year")+
+  ylab("Rooms occupied")+
+  ggtitle("")+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "none")
+```
+
+
+# Part2: Batch forecasting
+
+## Modelling
+```{r}
+data=seq(from=1505,to=2795,by=10)
+h=18
+hs=6
+hm=12
+```
+
+
+```{r}
+aframe=read.csv("cv.csv")
+```
+_I recommend you to read the file instead of running following time-consuming codes._
+
+```{r}
+aframe=tibble(ID=1:130,Type=NA,Description=NA,In_sample_length=NA,
+              Trend=NA, Seasonality=NA,
+              sMAPE_ETS=NA,sMAPE_Arima1=NA,sMAPE_Arima2=NA,
+              Model=NA,Compo=NA,MAE_long=NA,
+              sMAPE_short=NA,sMAPE_medium=NA,sMAPE_long=NA,
+              MASE_naive=NA,MASE_snaive=NA,MASE_drift=NA,
+              
+              sMAPE_ETS_cv=NA,sMAPE_Arima1_cv=NA,sMAPE_Arima2_cv=NA,
+              Model_cv=NA,Compo_cv=NA,MAE_long_cv=NA,
+              sMAPE_short_cv=NA,sMAPE_medium_cv=NA,sMAPE_long_cv=NA,
+              MASE_naive_cv=NA,MASE_snaive_cv=NA,MASE_drift_cv=NA,
+              
+              MAE_long_ETS=NA,sMAPE_long_ETS=NA,MASE_naive_ETS=NA,
+              MASE_snaive_ETS=NA,MASE_drift_ETS=NA,
+              
+              MAE_long_Arima=NA,sMAPE_long_Arima=NA,MASE_naive_Arima=NA,
+              MASE_snaive_Arima=NA,MASE_drift_Arima=NA
+              )
+```
+
+fit ets to all time series
+```{r}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+  
+  fit=ets(y)
+  fc=forecast(fit,h=h)$mean
+  
+  aframe$MAE_long_ETS[arr]=accuracy(fc,yout)[3]
+  aframe$sMAPE_long_ETS[arr]=mean(200*(abs(yout-fc)/(yout+fc)))
+  aframe$MASE_naive_ETS[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,h=h)$mean,yout)[3]
+  aframe$MASE_snaive_ETS[arr]=accuracy(fc,yout)[3]/accuracy(snaive(y,h=h)$mean,yout)[3]
+  aframe$MASE_drift_ETS[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,drift=T,h=h)$mean,yout)[3]
+  
+  arr=arr+1
+}
+```
+
+fit arima to all time series
+```{r}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+  
+  fit1=auto.arima(y)
+  fit2=auto.arima(y,lambda = "auto")
+  
+  if (accuracy(fit1)[5]<=accuracy(fit2)[5]){
+    fc=forecast(fit1,h=h)$mean
+  } else {
+    fc=forecast(fit2,h=h)$mean
+  }
+  
+  aframe$MAE_long_Arima[arr]=accuracy(fc,yout)[3]
+  aframe$sMAPE_long_Arima[arr]=mean(200*(abs(yout-fc)/(yout+fc)))
+  aframe$MASE_naive_Arima[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,h=h)$mean,yout)[3]
+  aframe$MASE_snaive_Arima[arr]=accuracy(fc,yout)[3]/accuracy(snaive(y,h=h)$mean,yout)[3]
+  aframe$MASE_drift_Arima[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,drift=T,h=h)$mean,yout)[3]
+  
+  arr=arr+1
+}
+```
+
+Cross-validation. Since we want to compare the forecast power between different time series and the data in the M3 competition is strictly positive, we use sMAPE. (fpp p80,p84)
+
+Read information from the time series.
+
+```{r}
+arr=1
+for (i in data){
+  aframe$Type[arr]=M3[[i]]$type
+  aframe$Description[arr]=M3[[i]]$description
+  aframe$In_sample_length[arr]=M3[[i]]$n
+  arr=arr+1
+}
+```
+
+
+```{r}
+summary(aframe)
+```
+
+
+We should decide the set forecast origins, in other words, how many times will cross-validation process produce forecasts for each model. As we have monthly data here, it makes sense to choose whole number of years. 24, 36 or 48 origins seem reasonable choices. As the in-sample length varies among these 130 time series, we will set number of cross-validation steps around 1/3 of the insample data. The forecast window length will be the same as the length we will forecast about the out-of-sample data, which is 18.
+
+```{r, results='hide', warning=FALSE, eval=FALSE}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+  origin2=length(y)-h
+  origin1=origin2-12*(length(y) %/% 12 %/% 3)+1
+  origins=origin1:origin2
+  sMAPEs=array(NA, c(length(origins),3))
+  
+  for (origin in origins){
+    yt=head(y,origin)
+    yv=y[(origin+1):(origin+h)]
+    
+    fit.es=ets(yt)
+    fit.ari1=auto.arima(yt)
+    fit.ari2=auto.arima(yt, lambda="auto")
+    
+    fs1=forecast(fit.es, h=h)$mean
+    fs2=forecast(fit.ari1, h=h)$mean
+    fs3=forecast(fit.ari2, h=h)$mean
+    
+    sMAPEs[which(origin==origins),1]=mean(200*(abs(yv-fs1)/(yv+fs1)))
+    sMAPEs[which(origin==origins),2]=mean(200*(abs(yv-fs2)/(yv+fs2)))
+    sMAPEs[which(origin==origins),3]=mean(200*(abs(yv-fs3)/(yv+fs3)))
+  }
+  
+  aframe$sMAPE_ETS_cv[arr]=colMeans(sMAPEs)[1]
+  aframe$sMAPE_Arima1_cv[arr]=colMeans(sMAPEs)[2]
+  aframe$sMAPE_Arima2_cv[arr]=colMeans(sMAPEs)[3]
+  
+  best=which.min(colMeans(sMAPEs))
+  
+  
+  if (best==1){
+    aframe$Model_cv[arr]="ETS"
+    fit=ets(y)
+    aframe$Compo_cv[arr]=paste(fit$components,collapse=";")
+  } else if (best==2){
+    aframe$Model_cv[arr]="Arima"
+    fit=auto.arima(y)
+    aframe$Compo_cv[arr]=paste(fit$arma,collapse=";")
+  } else {
+    aframe$Model_cv[arr]="Arima(transform)"
+    fit=auto.arima(y, lambda="auto")
+    aframe$Compo_cv[arr]=paste(fit$arma,collapse=";")
+  }
+  
+  fc=forecast(fit,h=h)$mean
+  fcs=forecast(fit,h=hs)$mean
+  fcm=forecast(fit,h=hm)$mean
+  
+  # MAE=accuracy(fc,yout)[3]
+  # sMAPEshort=mean(200*(abs(yout[1:6]-fcs)/(yout[1:6]+fcs)))
+  # sMAPEmedium=mean(200*(abs(yout[1:12]-fcm)/(yout[1:12]+fcm)))
+  # sMAPElong=mean(200*(abs(yout-fc)/(yout+fc)))
+  # MASEnaive=accuracy(fc,yout)[3]/accuracy(rwf(y,h=h)$mean,yout)
+  # MASEsnaive=accuracy(fc,yout)[3]/accuracy(snaive(y,h=h)$mean,yout)
+  # MASEdrift=accuracy(fc,yout)[3]/accuracy(rwf(y,drift=T,h=h)$mean,yout)
+  
+  aframe$MAE_long_cv[arr]=accuracy(fc,yout)[3]
+  aframe$sMAPE_short_cv[arr]=mean(200*(abs(yout[1:6]-fcs)/(yout[1:6]+fcs)))
+  aframe$sMAPE_medium_cv[arr]=mean(200*(abs(yout[1:12]-fcm)/(yout[1:12]+fcm)))
+  aframe$sMAPE_long_cv[arr]=mean(200*(abs(yout-fc)/(yout+fc)))
+  aframe$MASE_naive_cv[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,h=h)$mean,yout)[3]
+  aframe$MASE_snaive_cv[arr]=accuracy(fc,yout)[3]/accuracy(snaive(y,h=h)$mean,yout)[3]
+  aframe$MASE_drift_cv[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,drift=T,h=h)$mean,yout)[3]
+  
+  arr=arr+1
+}
+
+```
+
+
+scale-dependent error measure:MAE
+scale-independent error measure:sMAPE
+Relative error measure:MASE
+
+
+```{r, results='hide', warning=FALSE, eval=FALSE}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+  sMAPEs=array(NA, 3)
+  
+  yt=head(y,length(y)-h)
+  yv=tail(y,h)
+  
+  fit.es=ets(yt)
+  fit.ari1=auto.arima(yt)
+  fit.ari2=auto.arima(yt, lambda="auto")
+  
+  fs1=forecast(fit.es, h=h)$mean
+  fs2=forecast(fit.ari1, h=h)$mean
+  fs3=forecast(fit.ari2, h=h)$mean
+  
+  sMAPEs[1]=mean(200*(abs(yv-fs1)/(yv+fs1)))
+  sMAPEs[2]=mean(200*(abs(yv-fs2)/(yv+fs2)))
+  sMAPEs[3]=mean(200*(abs(yv-fs3)/(yv+fs3)))  
+  
+  aframe$sMAPE_ETS[arr]=sMAPEs[1]
+  aframe$sMAPE_Arima1[arr]=sMAPEs[2]
+  aframe$sMAPE_Arima2[arr]=sMAPEs[3]
+  
+  best=which.min(sMAPEs)
+  
+  
+  if (best==1){
+    aframe$Model[arr]="ETS"
+    fit=ets(y)
+    aframe$Compo[arr]=paste(fit$components,collapse=";")
+    
+    # trend or not
+    if (fit$components[2]=="N"){
+      aframe$Trend[arr]=0
+    } else {
+      aframe$Trend[arr]=1
+    }
+    
+    # seasonality or not
+    if (fit$components[3]=="N"){
+      aframe$Seasonality[arr]=0
+    } else {
+      aframe$Seasonality[arr]=1
+    }
+    
+  } else if (best==2){
+    aframe$Model[arr]="Arima"
+    fit=auto.arima(y)
+    aframe$Compo[arr]=paste(fit$arma,collapse=";")
+    
+    #trend or not
+    if (fit$arma[6]==0){
+      aframe$Trend[arr]=0
+    } else {
+      aframe$Trend[arr]=1
+    }
+    
+    #seasonality or not
+    if (fit$arma[7]==0){
+      aframe$Seasonality[arr]=0
+    } else {
+      aframe$Seasonality[arr]=1
+    }
+    
+  } else {
+    aframe$Model[arr]="Arima(transform)"
+    fit=auto.arima(y,lambda="auto")
+    aframe$Compo[arr]=paste(fit$arma,collapse=";")
+    
+    #trend or not
+    if (fit$arma[6]==0){
+      aframe$Trend[arr]=0
+    } else {
+      aframe$Trend[arr]=1
+    }
+    
+    #seasonality or not
+    if (fit$arma[7]==0){
+      aframe$Seasonality[arr]=0
+    } else {
+      aframe$Seasonality[arr]=1
+    }
+  }
+  
+  fc=forecast(fit,h=h)$mean
+  fcs=forecast(fit,h=hs)$mean
+  fcm=forecast(fit,h=hm)$mean
+  
+  aframe$MAE_long[arr]=accuracy(fc,yout)[3]
+  aframe$sMAPE_short[arr]=mean(200*(abs(yout[1:6]-fcs)/(yout[1:6]+fcs)))
+  aframe$sMAPE_medium[arr]=mean(200*(abs(yout[1:12]-fcm)/(yout[1:12]+fcm)))
+  aframe$sMAPE_long[arr]=mean(200*(abs(yout-fc)/(yout+fc)))
+  aframe$MASE_naive[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,h=h)$mean,yout)[3]
+  aframe$MASE_snaive[arr]=accuracy(fc,yout)[3]/accuracy(snaive(y,h=h)$mean,yout)[3]
+  aframe$MASE_drift[arr]=accuracy(fc,yout)[3]/accuracy(rwf(y,drift=T,h=h)$mean,yout)[3]
+  
+  
+  arr=arr+1
+}
+
+```
+
+```{r}
+write_csv(aframe,file="cv.csv",col_names=TRUE)
+```
+
+
+```{r}
+aframe %>%
+  group_by(Model) %>%
+  summarise(Count=n())
+```
+
+```{r}
+aframe %>%
+  group_by(Model_cv) %>%
+  summarise(Count=n())
+```
+
+```{r}
+aframe %>%
+  group_by(Trend,Model) %>%
+  summarise(Count=n())
+```
+
+
+
+
+
+```{r}
+aframe %>%
+  filter(Model=="ETS") %>%
+  mutate(Error=substr(Compo,1,1),
+         TS=paste(substr(Compo,3,3),substr(Compo,5,5),sep=""),
+         Damp=substr(Compo,7,7)) %>%
+  group_by(Seasonality,Error,Damp,TS) %>%
+  summarise(Count=n())
+```
+
+```{r}
+aframe %>%
+  filter(Model_cv=="ETS") %>%
+  mutate(Error=substr(Compo_cv,1,1),
+         TS=paste(substr(Compo_cv,3,3),substr(Compo_cv,5,5),sep=""),
+         Damp=substr(Compo_cv,7,7)) %>%
+  group_by(Seasonality,Error,Damp,TS) %>%
+  summarise(Count=n())
+```
+
+
+```{r}
+aframe %>%
+  filter(Model %in% c("Arima", "Arima(transform)")) %>%
+  mutate(Error=substr(Compo,1,1),
+         TS=paste(substr(Compo,3,3),substr(Compo,5,5),sep=""),
+         Damp=substr(Compo,7,7)) %>%
+  group_by(Seasonality,Error,Damp,TS) %>%
+  summarise(Count=n())
+```
+
+
+
+
+
+## Analysing
+
+
+```{r}
+xray::anomalies(aframe)
+```
+
+```{r}
+which(is.na(aframe$sMAPE_long)==T)
+which(is.na(aframe$sMAPE_Arima2_cv)==T)
+which(is.na(aframe$sMAPE_long_Arima)==T)
+```
+
+
+```{r}
+y=M3[[2745]]$x
+yout=M3[[2745]]$xx
+autoplot(y)+
+  xlab("Year")+
+  ylab("Observed value")+
+  theme_bw(base_line_size = 0)
+
+autoplot(M3[[2745]])
+
+```
+
+```{r}
+aframe$Model[125]
+aframe$Model_cv[125]
+fit=auto.arima(y,lambda = "auto")
+fc=forecast(fit,h=18)
+fc
+
+autoplot(fc, color="blue")+
+  autolayer(yout, color="black")+
+  xlab("Year")+
+  ylab("Observations and forecasts")+
+  ggtitle("")+
+  theme_bw(base_line_size = 0)+
+  theme(legend.position = "none")
+```
+
+Influenced by the unusual exponential increasing trend at the end of the forecasting period. Obviously, simple methods behave much better in this case.
+
+
+```{r}
+y=M3[[2535]]$x
+yout=M3[[2535]]$xx
+autoplot(y)
+autoplot(M3[[2535]])
+```
+
+There is an exponential increasing period in the training data, so while doing the cross validation, automatic arima with data transformation will cause the same error as the previous one.
+
+```{r, results='hide', warning=FALSE, eval=FALSE}
+y=M3[[2535]]$x
+yout=M3[[2535]]$xx
+origin2=length(y)-h
+origin1=origin2-12*(length(y) %/% 12 %/% 3)+1
+origins=origin1:origin2
+sMAPEs=array(NA, c(length(origins),2))
+  
+for (origin in origins){
+  yt=head(y,origin)
+  yv=y[(origin+1):(origin+h)]
+  
+  fit.ari2=auto.arima(yt, lambda="auto")
+  
+  fs3=forecast(fit.ari2, h=h)$mean
+  
+  sMAPEs[which(origin==origins),1]=origin
+  sMAPEs[which(origin==origins),2]=mean(200*(abs(yv-fs3)/(yv+fs3)))
+}
+  
+
+sMAPEs
+
+```
+
+```{r}
+yt=head(y,63)
+
+autoplot(yt)+
+  xlab("Year")+
+  ylab("Observed value")+
+  theme_bw(base_line_size = 0)
+
+fit=auto.arima(yt,lambda = "auto")
+fs=forecast(fit,h=h)
+
+autoplot(fs)+
+  xlab("Year")+
+  ylab("Observations and forecasts")+
+  ggtitle("")+
+  theme_bw(base_line_size = 0)+
+  theme(plot.margin = unit(rep(1,4),"cm"))
+```
+
+
+Compare the results from validation, cross-validation, ets and arima.
+
+```{r}
+aframe %>%
+  group_by(Trend,Seasonality) %>%
+  summarise(sMAPE_v=mean(sMAPE_long, na.rm=T), sMAPE_cv=mean(sMAPE_long_cv),
+            sMAPE_ets=mean(sMAPE_long_ETS), 
+            sMAPE_arima=mean(sMAPE_long_Arima, na.rm=T))
+```
+
+```{r}
+aframe %>%
+  group_by(Seasonality) %>%
+  summarise(sMAPE_v=mean(sMAPE_long, na.rm=T), sMAPE_cv=mean(sMAPE_long_cv),
+            sMAPE_ets=mean(sMAPE_long_ETS), 
+            sMAPE_arima=mean(sMAPE_long_Arima, na.rm=T))
+```
+
+```{r}
+aframe %>%
+  group_by(Trend) %>%
+  summarise(sMAPE_v=mean(sMAPE_long, na.rm=T), sMAPE_cv=mean(sMAPE_long_cv),
+            sMAPE_ets=mean(sMAPE_long_ETS), 
+            sMAPE_arima=mean(sMAPE_long_Arima, na.rm=T))
+```
+
+```{r}
+aframe %>%
+  group_by(Type) %>%
+  summarise(Count=n(), sMAPE_v=mean(sMAPE_long, na.rm=T), 
+            sMAPE_cv=mean(sMAPE_long_cv),
+            sMAPE_ets=mean(sMAPE_long_ETS), 
+            sMAPE_arima=mean(sMAPE_long_Arima, na.rm=T))
+```
+
+```{r}
+aframe %>%
+  group_by(Seasonality,Type) %>%
+  summarise(Count=n(), sMAPE_v=mean(sMAPE_long, na.rm=T), 
+            sMAPE_cv=mean(sMAPE_long_cv),
+            sMAPE_ets=mean(sMAPE_long_ETS), 
+            sMAPE_arima=mean(sMAPE_long_Arima, na.rm=T)) %>%
+  write_csv(file="recommendation.csv",col_names = T)
+```
+
+
+```{r}
+aframe %>%
+  group_by(Trend,Seasonality) %>%
+  summarise(Count=n(),sMAPE_short=mean(sMAPE_short),
+            sMAPE_medium=mean(sMAPE_medium),
+            sMAPE_long=mean(sMAPE_long, na.rm=T),
+            sMAPE_short_cv=mean(sMAPE_short_cv),
+            sMAPE_medium_cv=mean(sMAPE_medium_cv),
+            sMAPE_long_cv=mean(sMAPE_long_cv))
+```
+
+
+
+
+```{r}
+aframe %>%
+  group_by(Type) %>%
+  mutate(mase_naive=(MASE_naive>=1 & MASE_naive>=MASE_drift & MASE_naive>=MASE_snaive),
+         mase_drift=(MASE_drift>=1 & MASE_drift>MASE_naive & MASE_drift>=MASE_snaive),
+         mase_snaive=(MASE_snaive>=1 & MASE_snaive>MASE_naive & MASE_snaive>MASE_drift),
+         ttal=(MASE_naive>=1 | MASE_drift>=1 | MASE_snaive>=1)) %>%
+  summarise(Count=n(),sMAPE=mean(sMAPE_long,na.rm=T),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count) %>%
+  write_csv(file="simple1.csv",col_names = T, append = T)
+```
+
+Times series from demographic and macro are easier to be predicted than time series from finance, industry and micro. This is quite logical as macro and demographic issues are controlled by the government and/or restricted by the law of social development, while things in finance, industry and micro are facing more uncertainties.
+
+
+```{r}
+aframe %>%
+  group_by(Seasonality) %>%
+  mutate(mase_naive=(MASE_naive>=1 & MASE_naive>=MASE_drift & MASE_naive>=MASE_snaive),
+         mase_drift=(MASE_drift>=1 & MASE_drift>MASE_naive & MASE_drift>=MASE_snaive),
+         mase_snaive=(MASE_snaive>=1 & MASE_snaive>MASE_naive & MASE_snaive>MASE_drift),
+         ttal=(MASE_naive>=1 | MASE_drift>=1 | MASE_snaive>=1)) %>%
+  summarise(Count=n(),sMAPE=mean(sMAPE_long,na.rm=T),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count)
+```
+
+
+Time series without trend and seasonality have the highest sMAPE while forecasting future data. And about 67% of them can be better predicted by simple methods.
+
+Other types of time series have similar sMAPE.
+
+High percent of all the time series can be predicted more accurately by simple methods. Generally, naive and drift methods can apply to time series without seasonality, while snaive can apply to time series with seasonality.
+
+
+```{r}
+aframe %>%
+  group_by(Seasonality) %>%
+  mutate(mase_naive=(MASE_naive_cv>=1 & MASE_naive_cv>=MASE_drift_cv 
+                     & MASE_naive_cv>=MASE_snaive_cv),
+         mase_drift=(MASE_drift_cv>=1 & MASE_drift_cv>MASE_naive_cv 
+                     & MASE_drift_cv>=MASE_snaive_cv),
+         mase_snaive=(MASE_snaive_cv>=1 & MASE_snaive_cv>MASE_naive_cv 
+                      & MASE_snaive_cv>MASE_drift_cv),
+         ttal=(MASE_naive_cv>=1 | MASE_drift_cv>=1 | MASE_snaive_cv>=1)) %>%
+  summarise(Count=n(),sMAPE=mean(sMAPE_long_cv),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count)
+```
+
+```{r}
+aframe %>%
+  group_by(Seasonality) %>%
+  mutate(mase_naive=(MASE_naive_ETS>=1 & MASE_naive_ETS>=MASE_drift_ETS 
+                     & MASE_naive_ETS>=MASE_snaive_ETS),
+         mase_drift=(MASE_drift_ETS>=1 & MASE_drift_ETS>MASE_naive_ETS 
+                     & MASE_drift_ETS>=MASE_snaive_ETS),
+         mase_snaive=(MASE_snaive_ETS>=1 & MASE_snaive_ETS>MASE_naive_ETS 
+                      & MASE_snaive_ETS>MASE_drift_ETS),
+         ttal=(MASE_naive_ETS>=1 | MASE_drift_ETS>=1 | MASE_snaive_ETS>=1)) %>%
+  summarise(Count=n(),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count)
+```
+
+```{r}
+aframe %>%
+  group_by(Seasonality) %>%
+  mutate(mase_naive=(MASE_naive_Arima>=1 & MASE_naive_Arima>=MASE_drift_Arima 
+                     & MASE_naive_Arima>=MASE_snaive_Arima),
+         mase_drift=(MASE_drift_Arima>=1 & MASE_drift_Arima>MASE_naive_Arima 
+                     & MASE_drift_Arima>=MASE_snaive_Arima),
+         mase_snaive=(MASE_snaive_Arima>=1 & MASE_snaive_Arima>MASE_naive_Arima 
+                      & MASE_snaive_Arima>MASE_drift_Arima),
+         ttal=(MASE_naive_Arima>=1 | MASE_drift_Arima>=1 
+               | MASE_snaive_Arima>=1)) %>%
+  summarise(Count=n(),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count)
+```
+
+
+
+```{r}
+aframe %>%
+  group_by(Trend) %>%
+  mutate(mase_naive=(MASE_naive>=1 & MASE_naive>=MASE_drift & MASE_naive>=MASE_snaive),
+         mase_drift=(MASE_drift>=1 & MASE_drift>MASE_naive & MASE_drift>=MASE_snaive),
+         mase_snaive=(MASE_snaive>=1 & MASE_snaive>MASE_naive & MASE_snaive>MASE_drift),
+         ttal=(MASE_naive>=1 | MASE_drift>=1 | MASE_snaive>=1)) %>%
+  summarise(Count=n(),sMAPE=mean(sMAPE_long,na.rm=T),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count) %>%
+  write_csv(file="simple11.csv",col_names = T,append = T)
+```
+
+
+```{r}
+aframe %>%
+  group_by(Trend) %>%
+  mutate(mase_naive=(MASE_naive_cv>=1 & MASE_naive_cv>=MASE_drift_cv 
+                     & MASE_naive_cv>=MASE_snaive_cv),
+         mase_drift=(MASE_drift_cv>=1 & MASE_drift_cv>MASE_naive_cv 
+                     & MASE_drift_cv>=MASE_snaive_cv),
+         mase_snaive=(MASE_snaive_cv>=1 & MASE_snaive_cv>MASE_naive_cv 
+                      & MASE_snaive_cv>MASE_drift_cv),
+         ttal=(MASE_naive_cv>=1 | MASE_drift_cv>=1 | MASE_snaive_cv>=1)) %>%
+  summarise(Count=n(),sMAPE=mean(sMAPE_long_cv),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count) %>%
+  write_csv(file="simple11.csv",col_names = T,append = T)
+```
+
+```{r}
+aframe %>%
+  group_by(Trend) %>%
+  mutate(mase_naive=(MASE_naive_ETS>=1 & MASE_naive_ETS>=MASE_drift_ETS 
+                     & MASE_naive_ETS>=MASE_snaive_ETS),
+         mase_drift=(MASE_drift_ETS>=1 & MASE_drift_ETS>MASE_naive_ETS 
+                     & MASE_drift_ETS>=MASE_snaive_ETS),
+         mase_snaive=(MASE_snaive_ETS>=1 & MASE_snaive_ETS>MASE_naive_ETS 
+                      & MASE_snaive_ETS>MASE_drift_ETS),
+         ttal=(MASE_naive_ETS>=1 | MASE_drift_ETS>=1 | MASE_snaive_ETS>=1)) %>%
+  summarise(Count=n(),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count) %>%
+  write_csv(file="simple11.csv",col_names = T,append = T)
+```
+
+
+
+```{r}
+aframe %>%
+  group_by(Trend) %>%
+  mutate(mase_naive=(MASE_naive_Arima>=1 & MASE_naive_Arima>=MASE_drift_Arima 
+                     & MASE_naive_Arima>=MASE_snaive_Arima),
+         mase_drift=(MASE_drift_Arima>=1 & MASE_drift_Arima>MASE_naive_Arima 
+                     & MASE_drift_Arima>=MASE_snaive_Arima),
+         mase_snaive=(MASE_snaive_Arima>=1 & MASE_snaive_Arima>MASE_naive_Arima 
+                      & MASE_snaive_Arima>MASE_drift_Arima),
+         ttal=(MASE_naive_Arima>=1 | MASE_drift_Arima>=1 
+               | MASE_snaive_Arima>=1)) %>%
+  summarise(Count=n(),
+            MASE_naive=sum(mase_naive),MASE_drift=sum(mase_drift),
+            MASE_snaive=sum(mase_snaive),SimpleBetter=sum(ttal)) %>%
+  mutate(SimpleBetterRate=SimpleBetter/Count) %>%
+  write_csv(file="simple11.csv",col_names = T,append = T)
+```
+
+
+```{r}
+aframe %>%
+  group_by(In_sample_length) %>%
+  summarise(Count=n(),sMAPE=mean(sMAPE_long))
+```
+
+
+```{r}
+bframe=read.csv("hz.csv")
+```
+_we recommend you read the file instead of running the following time-consuming codes_
+
+```{r}
+bframe=tibble(ID=1:2340,Type=NA,Trend=NA,Seasonality=NA,Horizon=NA,sMAPE=NA,
+              Model=NA,sMAPE_ETS=NA,sMAPE_Arima=NA,sMAPE_naive=NA,
+              sMAPE_snaive=NA,sMAPE_drift=NA)
+```
+
+
+
+```{r}
+arr=1
+for (i in data){
+  bframe$Type[((arr-1)*18+1):(arr*18)]=M3[[i]]$type
+  arr=arr+1
+}
+```
+
+
+naive, snaive, drift
+```{r}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+  
+  for (h in 1:18){
+    fc1=rwf(y,h=h)$mean
+    fc2=snaive(y,h=h)$mean
+    fc3=rwf(y,h=h,drift=T)$mean
+    #bframe$Horizon[(arr-1)*18+h]=h
+    bframe$sMAPE_naive[(arr-1)*18+h]=mean(200*(abs(yout[1:h]-fc1)/(yout[1:h]+fc1)))
+    bframe$sMAPE_snaive[(arr-1)*18+h]=mean(200*(abs(yout[1:h]-fc2)/(yout[1:h]+fc2)))
+    bframe$sMAPE_drift[(arr-1)*18+h]=mean(200*(abs(yout[1:h]-fc3)/(yout[1:h]+fc3)))
+  }
+  
+  arr=arr+1
+}
+```
+
+
+ets and arima
+```{r}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+  
+  fit1=ets(y)
+  fit2=auto.arima(y)
+  fit3=auto.arima(y,lambda = "auto")
+  
+  if (accuracy(fit2)[5]<=accuracy(fit3)[5]){
+    fit4=fit2
+  } else {
+    fit4=fit3
+  }
+  
+  for (h in 1:18){
+    fc1=forecast(fit1,h=h)$mean
+    fc2=forecast(fit4,h=h)$mean
+    #bframe$Horizon[(arr-1)*18+h]=h
+    bframe$sMAPE_ETS[(arr-1)*18+h]=mean(200*(abs(yout[1:h]-fc1)/(yout[1:h]+fc1)))
+    bframe$sMAPE_Arima[(arr-1)*18+h]=mean(200*(abs(yout[1:h]-fc2)/(yout[1:h]+fc2)))
+  }
+  
+  arr=arr+1
+}
+```
+
+
+
+
+validation
+
+```{r, results='hide', warning=FALSE, eval=FALSE}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+  sMAPEs=array(NA, 3)
+  
+  yt=head(y,length(y)-h)
+  yv=tail(y,h)
+  
+  fit.es=ets(yt)
+  fit.ari1=auto.arima(yt)
+  fit.ari2=auto.arima(yt, lambda="auto")
+  
+  fs1=forecast(fit.es, h=h)$mean
+  fs2=forecast(fit.ari1, h=h)$mean
+  fs3=forecast(fit.ari2, h=h)$mean
+  
+  sMAPEs[1]=mean(200*(abs(yv-fs1)/(yv+fs1)))
+  sMAPEs[2]=mean(200*(abs(yv-fs2)/(yv+fs2)))
+  sMAPEs[3]=mean(200*(abs(yv-fs3)/(yv+fs3)))  
+  
+  best=which.min(sMAPEs)
+  
+  
+  if (best==1){
+    fit=ets(y)
+    bframe$Model[((arr-1)*18+1):(arr*18)]="ETS"
+    
+    # trend or not
+    if (fit$components[2]=="N"){
+      bframe$Trend[((arr-1)*18+1):(arr*18)]=0
+    } else {
+      bframe$Trend[((arr-1)*18+1):(arr*18)]=1
+    }
+
+    # seasonality or not
+    if (fit$components[3]=="N"){
+      bframe$Seasonality[((arr-1)*18+1):(arr*18)]=0
+    } else {
+      bframe$Seasonality[((arr-1)*18+1):(arr*18)]=1
+    }
+    
+  } else if (best==2){
+    fit=auto.arima(y)
+    bframe$Model[((arr-1)*18+1):(arr*18)]="Arima"
+    
+    #trend or not
+    if (fit$arma[6]==0){
+      bframe$Trend[((arr-1)*18+1):(arr*18)]=0
+    } else {
+      bframe$Trend[((arr-1)*18+1):(arr*18)]=1
+    }
+
+    #seasonality or not
+    if (fit$arma[7]==0){
+      bframe$Seasonality[((arr-1)*18+1):(arr*18)]=0
+    } else {
+      bframe$Seasonality[((arr-1)*18+1):(arr*18)]=1
+    }
+    
+  } else {
+    fit=auto.arima(y,lambda="auto")
+    bframe$Model[((arr-1)*18+1):(arr*18)]="Arima(transform)"
+    
+    #trend or not
+    if (fit$arma[6]==0){
+      bframe$Trend[((arr-1)*18+1):(arr*18)]=0
+    } else {
+      bframe$Trend[((arr-1)*18+1):(arr*18)]=1
+    }
+
+    #seasonality or not
+    if (fit$arma[7]==0){
+      bframe$Seasonality[((arr-1)*18+1):(arr*18)]=0
+    } else {
+      bframe$Seasonality[((arr-1)*18+1):(arr*18)]=1
+    }
+  }
+  
+  for (h in 1:18){
+    fc=forecast(fit,h=h)$mean
+    #bframe$Horizon[(arr-1)*18+h]=h
+    bframe$sMAPE[(arr-1)*18+h]=mean(200*(abs(yout[1:h]-fc)/(yout[1:h]+fc)))
+  }
+  
+  
+  arr=arr+1
+}
+
+```
+
+cross-validation. we can use the results in aframe so that the program will not be that time-consuming
+```{r}
+arr=1
+for (i in data){
+  print(i)
+  y=M3[[i]]$x
+  yout=M3[[i]]$xx
+ 
+  if (aframe$Model_cv[arr]=="ETS"){
+    fit=ets(y)
+    bframe$Model_cv[((arr-1)*18+1):(arr*18)]="ETS"
+  } else if (aframe$Model_cv[arr]=="Arima"){
+    fit=auto.arima(y)
+    bframe$Model_cv[((arr-1)*18+1):(arr*18)]="Arima"
+  } else {
+    fit=auto.arima(y,lambda = "auto")
+    bframe$Model_cv[((arr-1)*18+1):(arr*18)]="Arima(transform)"
+  }
+  
+  for (h in 1:18){
+    fc=forecast(fit,h=h)$mean
+    bframe$sMAPE_cv[(arr-1)*18+h]=mean(200*(abs(yout[1:h]-fc)/(yout[1:h]+fc)))
+  }
+  
+  
+  arr=arr+1
+}
+
+```
+
+```{r}
+write_csv(bframe,file="hz.csv",col_names=TRUE)
+```
+
+```{r}
+xray::anomalies(bframe)
+```
+
+```{r}
+for (i in 1:2340){
+  if (bframe$Seasonality[i]==0){
+    bframe$Seasonality[i]="Non-seasonal"
+  } else {
+    bframe$Seasonality[i]="Monthly"
+  }
+}
+```
+
+
+The accuracy of forecasting monthly data is quite stable regardless of the forecast horizon, while the error of forecasting non-seasonal data increases with the expanding of forecast horizon.
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Trend==0) %>%
+  group_by(Horizon) %>%
+  summarise(Validation=mean(sMAPE,na.rm=T),CrossValidation=mean(sMAPE_cv,na.rm=T),
+            ETS=mean(sMAPE_ETS,na.rm=T),ARIMA=mean(sMAPE_Arima,na.rm=T)) %>%
+  gather(Method,sMAPE,c(Validation,CrossValidation,ETS,ARIMA),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=sMAPE,linetype=Method)) +
+  geom_smooth(color="black", size=0.5,se=F) +
+  xlab("Forecast horizon") +
+  theme_bw(base_line_size = 0) +
+  scale_linetype_manual(values=c("solid","twodash","dashed","dotted"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Trend==1) %>%
+  group_by(Horizon) %>%
+  summarise(Validation=mean(sMAPE,na.rm=T),CrossValidation=mean(sMAPE_cv,na.rm=T),
+            ETS=mean(sMAPE_ETS,na.rm=T),ARIMA=mean(sMAPE_Arima,na.rm=T)) %>%
+  gather(Method,sMAPE,c(Validation,CrossValidation,ETS,ARIMA),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=sMAPE,linetype=Method)) +
+  geom_smooth(color="black", size=0.5,se=F) +
+  xlab("Forecast horizon") +
+  theme_bw(base_line_size = 0) +
+  scale_linetype_manual(values=c("solid","twodash","dashed","dotted"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Seasonality=="Non-seasonal") %>%
+  group_by(Horizon) %>%
+  summarise(Validation=mean(sMAPE,na.rm=T),CrossValidation=mean(sMAPE_cv,na.rm=T),
+            ETS=mean(sMAPE_ETS,na.rm=T),ARIMA=mean(sMAPE_Arima,na.rm=T)) %>%
+  gather(Method,sMAPE,c(Validation,CrossValidation,ETS,ARIMA),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=sMAPE,linetype=Method)) +
+  geom_smooth(color="black", size=0.5,se=F) +
+  xlab("Forecast horizon") +
+  theme_bw(base_line_size = 0) +
+  scale_linetype_manual(values=c("solid","twodash","dashed","dotted"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Seasonality=="Monthly") %>%
+  group_by(Horizon) %>%
+  summarise(Validation=mean(sMAPE,na.rm=T),CrossValidation=mean(sMAPE_cv,na.rm=T),
+            ETS=mean(sMAPE_ETS,na.rm=T),ARIMA=mean(sMAPE_Arima,na.rm=T)) %>%
+  gather(Method,sMAPE,c(Validation,CrossValidation,ETS,ARIMA),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=sMAPE,linetype=Method)) +
+  geom_smooth(color="black", size=0.5,se=F) +
+  xlab("Forecast horizon") +
+  theme_bw(base_line_size = 0) +
+  scale_linetype_manual(values=c("solid","twodash","dashed","dotted"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  group_by(Horizon) %>%
+  summarise(Validation=mean(sMAPE,na.rm=T),CrossValidation=mean(sMAPE_cv,na.rm=T),
+            ETS=mean(sMAPE_ETS,na.rm=T),ARIMA=mean(sMAPE_Arima,na.rm=T)) %>%
+  gather(Method,sMAPE,c(Validation,CrossValidation,ETS,ARIMA),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=sMAPE,linetype=Method)) +
+  geom_smooth(color="black", size=0.5,se=F) +
+  xlab("Forecast horizon") +
+  theme_bw(base_line_size = 0) +
+  scale_linetype_manual(values=c("solid","twodash","dashed","dotted"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  group_by(Type,Horizon) %>%
+  summarise(Validation=mean(sMAPE,na.rm=T),CrossValidation=mean(sMAPE_cv,na.rm=T),
+            ETS=mean(sMAPE_ETS,na.rm=T),ARIMA=mean(sMAPE_Arima,na.rm=T)) %>%
+  write_csv(file="typehorizon.csv",col_names = T)
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  mutate(naive=(sMAPE_naive<=sMAPE & sMAPE_naive<=sMAPE_ETS
+                & sMAPE_naive<=sMAPE_Arima & sMAPE_naive<=sMAPE_cv),
+         snaive=(sMAPE_snaive<=sMAPE & sMAPE_snaive<=sMAPE_ETS
+                & sMAPE_snaive<=sMAPE_Arima & sMAPE_snaive<=sMAPE_cv),
+         drift=(sMAPE_drift<=sMAPE & sMAPE_drift<=sMAPE_ETS
+                & sMAPE_drift<=sMAPE_Arima & sMAPE_drift<=sMAPE_cv)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  mutate(naive=(sMAPE_naive<=sMAPE),
+         snaive=(sMAPE_snaive<=sMAPE),
+         drift=(sMAPE_drift<=sMAPE)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  mutate(naive=(sMAPE_naive<=sMAPE_ETS),
+         snaive=(sMAPE_snaive<=sMAPE_ETS),
+         drift=(sMAPE_drift<=sMAPE_ETS)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  mutate(naive=(sMAPE_naive<=sMAPE_Arima),
+         snaive=(sMAPE_snaive<=sMAPE_Arima),
+         drift=(sMAPE_drift<=sMAPE_Arima)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  mutate(naive=(sMAPE_naive<=sMAPE_cv),
+         snaive=(sMAPE_snaive<=sMAPE_cv),
+         drift=(sMAPE_drift<=sMAPE_cv)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Trend==0) %>%
+  mutate(naive=(sMAPE_naive<=sMAPE & sMAPE_naive<=sMAPE_ETS
+                & sMAPE_naive<=sMAPE_Arima & sMAPE_naive<=sMAPE_cv),
+         snaive=(sMAPE_snaive<=sMAPE & sMAPE_snaive<=sMAPE_ETS
+                & sMAPE_snaive<=sMAPE_Arima & sMAPE_snaive<=sMAPE_cv),
+         drift=(sMAPE_drift<=sMAPE & sMAPE_drift<=sMAPE_ETS
+                & sMAPE_drift<=sMAPE_Arima & sMAPE_drift<=sMAPE_cv)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Trend==1) %>%
+  mutate(naive=(sMAPE_naive<=sMAPE & sMAPE_naive<=sMAPE_ETS
+                & sMAPE_naive<=sMAPE_Arima & sMAPE_naive<=sMAPE_cv),
+         snaive=(sMAPE_snaive<=sMAPE & sMAPE_snaive<=sMAPE_ETS
+                & sMAPE_snaive<=sMAPE_Arima & sMAPE_snaive<=sMAPE_cv),
+         drift=(sMAPE_drift<=sMAPE & sMAPE_drift<=sMAPE_ETS
+                & sMAPE_drift<=sMAPE_Arima & sMAPE_drift<=sMAPE_cv)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Seasonality=="Non-seasonal") %>%
+  mutate(naive=(sMAPE_naive<=sMAPE & sMAPE_naive<=sMAPE_ETS
+                & sMAPE_naive<=sMAPE_Arima & sMAPE_naive<=sMAPE_cv),
+         snaive=(sMAPE_snaive<=sMAPE & sMAPE_snaive<=sMAPE_ETS
+                & sMAPE_snaive<=sMAPE_Arima & sMAPE_snaive<=sMAPE_cv),
+         drift=(sMAPE_drift<=sMAPE & sMAPE_drift<=sMAPE_ETS
+                & sMAPE_drift<=sMAPE_Arima & sMAPE_drift<=sMAPE_cv)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+```{r, warning=FALSE}
+bframe %>%
+  filter(Seasonality=="Monthly") %>%
+  mutate(naive=(sMAPE_naive<=sMAPE & sMAPE_naive<=sMAPE_ETS
+                & sMAPE_naive<=sMAPE_Arima & sMAPE_naive<=sMAPE_cv),
+         snaive=(sMAPE_snaive<=sMAPE & sMAPE_snaive<=sMAPE_ETS
+                & sMAPE_snaive<=sMAPE_Arima & sMAPE_snaive<=sMAPE_cv),
+         drift=(sMAPE_drift<=sMAPE & sMAPE_drift<=sMAPE_ETS
+                & sMAPE_drift<=sMAPE_Arima & sMAPE_drift<=sMAPE_cv)) %>%
+  group_by(Horizon) %>%
+  summarise(Naive=sum(naive),Snaive=sum(snaive),Drift=sum(drift)) %>%
+  gather(SimpleMethod,SimpleBetter,c(Naive,Snaive,Drift),factor_key = T) %>%
+  ggplot(aes(x=Horizon,y=SimpleBetter,fill=SimpleMethod)) +
+  geom_bar(position="dodge",stat="identity",color="black",size=0.1)+
+  xlab("Forecast horizon")+
+  ylab("Number of better simple methods")+
+  theme_bw(base_line_size = 0)+
+  scale_fill_manual(name="Simple method",
+                    values=c("white","grey","black"),
+                    labels=c("Naïve","Snaïve","Drift"))
+```
+
+```{r}
+aframe %>%
+  group_by(Trend) %>%
+  summarise(Count=n())
+```
+
+
+
