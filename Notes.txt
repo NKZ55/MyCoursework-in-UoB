@@ -1,0 +1,2 @@
+As I added Conditional Formatting in the third report, the process of generating this report is quite slow
+on my computer. If you suffer from the same problem, you can open the pdf version I provide instead.
