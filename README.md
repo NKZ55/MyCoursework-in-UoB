@@ -4,6 +4,6 @@
 
 Original datasets are provided by _professors_ from the UoB.
 
-Most of the works are done _independently_ by myself.
+This is a groupwork, I was in charge of the VBA code.
 
 Please click the **main** button to see the branches.
