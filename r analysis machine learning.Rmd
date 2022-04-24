@@ -1,0 +1,1554 @@
+---
+title: "EDA & ML for SmartPhone users"
+author: "Ningkai"
+date: "13/04/2022"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    theme: lumen
+    code_folding: hide
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import libraries
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(skimr)
+library(xray)
+library(waffle)
+library(ggthemes)
+library(GGally)
+library(corrplot)
+library(factoextra)
+library(reshape2)
+library(caret)
+library(discrim)
+library(pROC)
+library(cluster)
+```
+
+# Read the data
+
+```{r, message=FALSE, warning=FALSE}
+smphUsers=read_csv('dataset.csv')
+colnames(smphUsers)[1]='System'
+colnames(smphUsers)[4:9]=c('H','E','X','A','C','O')
+colnames(smphUsers)[10:13]=c('AvoidSimilar','StatusObject',
+                             'EcoStatus','TimeOwnedPhone')
+```
+
+```{r}
+skim(smphUsers)
+```
+
+```{r}
+anomalies(smphUsers)
+```
+
+Some people just bought their phones, it's normal situation, we do not need to revise the data.
+
+# Descriptive Analysis
+
+```{r}
+smphUsers$System=as.factor(smphUsers$System)
+smphUsers$Gender=factor(smphUsers$Gender,
+                        levels=c('female','male'),
+                        labels=c('Female','Male'))
+```
+
+
+## iPhone vs Android
+
+```{r}
+system_waffle=smphUsers %>% 
+  group_by(System) %>% 
+  summarise(Total=n()) %>% 
+  mutate(perc=round(Total/sum(Total)*100)) %>% 
+  arrange(-perc)
+
+perc_counts=system_waffle$perc
+names(perc_counts)=system_waffle$System
+
+waffle(perc_counts,colors=c('#002333','#B4BEC9')) +
+  theme_fivethirtyeight() +
+  theme(axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.ticks.y=element_blank(),
+        plot.title=element_text(hjust=0.5,size=10)) +
+  labs(title="Percentage of System Group")
+```
+
+## Female vs Male
+
+```{r}
+gender_waffle=smphUsers %>% 
+  group_by(Gender) %>% 
+  summarise(Total=n()) %>% 
+  mutate(perc=round(Total/sum(Total)*100)) %>% 
+  arrange(-perc)
+
+percent_counts=gender_waffle$perc
+names(percent_counts)=gender_waffle$Gender
+
+waffle(percent_counts,colors=c('#002333','#B4BEC9')) +
+  theme_fivethirtyeight() +
+  theme(axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.ticks.y=element_blank(),
+        plot.title=element_text(hjust=0.5,size=10)) +
+  labs(title="Percentage of Gender Group")
+```
+
+```{r}
+smphUsers %>% 
+  group_by(System,Gender) %>% 
+  summarise(Total=n()) %>% 
+  mutate(perc=round(Total/sum(Total)*100))
+```
+
+
+```{r}
+smphUsers %>% 
+  group_by(Gender,System) %>% 
+  summarise(Total=n()) %>% 
+  mutate(perc=round(Total/sum(Total)*100))
+```
+
+Apparently, females tend to use iPhone when slightly more males prefer Android.
+
+## Distribution of Age Group
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=Age)) +
+  geom_histogram(binwidth=2,color='black',fill='#159A9C') +
+  labs(y='Age Counts') +
+  theme_stata() +
+  scale_x_continuous(breaks=seq(20,80,by=10))
+```
+
+Most of the people are younger generations, whose age is between 18 and 30.
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=Age,fill=System)) +
+  geom_histogram(binwidth=2,color='black') +
+  theme_stata() +
+  labs(y='Age Counts') +
+  scale_x_continuous(breaks=seq(20,80,by=10)) +
+  scale_fill_manual(values=c('#DEEFE7','#FFFFFF')) +
+  theme(legend.title=element_blank(),
+        legend.position = 'right',
+        legend.text=element_text(size = 8),
+        legend.key.size = unit(10,'pt'))
+```
+
+iPhone overwhelmingly beat Android among young generations (age under 25), while in other age groups these two systems occupy similar market share.
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=Age)) +
+  geom_histogram(binwidth=2,color='black',fill='#159A9C') +
+  labs(y='Age Counts') +
+  theme_stata() +
+  facet_wrap(~System)
+```
+
+## HEXACO
+
+```{r}
+ggparcoord(smphUsers,columns=4:9,alphaLines = 0.2) +
+  theme_stata() +
+  labs(x='Variable',y='Value')
+```
+
+
+```{r}
+smphUsers[4:9] %>% 
+  cor() %>% 
+  corrplot(method='number',type="lower",
+           tl.srt=45,tl.col=1,bg='black',diag=F)
+```
+
+There are few intercorrelations among HEXACO factors, and only two pairs show a bit higher intercorrelations: Honesty-Humility and Agreeableness, Honesty-Humility and Conscientiousness. [https://www-tandfonline-com.ezproxy1.bath.ac.uk/doi/full/10.1080/00223890902935878]
+
+```{r}
+smphUsers[4:9] %>% 
+  gather(HEXACO,Value,factor_key = T) %>% 
+  ggplot(aes(x=Value)) +
+  geom_histogram(binwidth=0.5,color='black',fill='#159A9C') +
+  theme_stata() +
+  labs(y='Counts') +
+  facet_wrap(~HEXACO)
+```
+
+For all HEACO factors, most people are in the middle scope.
+
+```{r}
+smphUsers %>% 
+  filter(Gender=='Male') %>%
+  select(4:9) %>% 
+  gather(HEXACO,Value,factor_key = T) %>% 
+  ggplot(aes(x=Value)) +
+  geom_histogram(binwidth=0.5,color='black',fill='#159A9C') +
+  theme_stata() +
+  labs(y='Counts') +
+  facet_wrap(~HEXACO)
+```
+
+```{r}
+smphUsers %>% 
+  filter(Gender=='Female') %>%
+  select(4:9) %>% 
+  gather(HEXACO,Value,factor_key = T) %>% 
+  ggplot(aes(x=Value)) +
+  geom_histogram(binwidth=0.5,color='black',fill='#159A9C') +
+  theme_stata() +
+  labs(y='Counts') +
+  facet_wrap(~HEXACO)
+```
+
+The patterns of HEXACO distributions are slightly different between the two gender group, especially in X, A and C factors. We will see if there's multicollinearity among them when using all of them to produce forecasts.
+
+```{r}
+smphUsers %>% 
+  filter(System=='iPhone') %>%
+  select(4:9) %>% 
+  gather(HEXACO,Value,factor_key = T) %>% 
+  ggplot(aes(x=Value)) +
+  geom_histogram(binwidth=0.5,color='black',fill='#159A9C') +
+  theme_stata() +
+  labs(y='Counts') +
+  facet_wrap(~HEXACO)
+```
+
+```{r}
+smphUsers %>% 
+  filter(System=='Android') %>%
+  select(4:9) %>% 
+  gather(HEXACO,Value,factor_key = T) %>% 
+  ggplot(aes(x=Value)) +
+  geom_histogram(binwidth=0.5,color='black',fill='#159A9C') +
+  theme_stata() +
+  labs(y='Counts') +
+  facet_wrap(~HEXACO)
+```
+
+The patterns of HEXACO factors' distributions are quite different between different system users, except for X, A, C and O.
+
+## Avoidance Similarity
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=AvoidSimilar)) +
+  geom_histogram(binwidth=0.5,color='black',fill='#159A9C') +
+  labs(x='Avoidance Similarity',y='Counts') +
+  theme_stata()
+```
+
+The distribution is slightly left skewed, which means that most people tend to do not care about what smartphone the majority of people are using.
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=AvoidSimilar)) +
+  geom_histogram(binwidth=0.5,color='black',fill='#159A9C') +
+  labs(x='Avoidance Similarity',y='Counts') +
+  theme_stata() +
+  facet_wrap(~System)
+```
+
+Compared to Android users, iPhone users are much more likely to neglect what smartphone the majority people are using.
+
+## Phone as Status Object
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=StatusObject)) +
+  geom_histogram(binwidth=0.3,color='black',fill='#159A9C') +
+  labs(x='Phone as Status Object',y='Counts') +
+  theme_stata()
+```
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=StatusObject)) +
+  geom_histogram(binwidth=0.3,color='black',fill='#159A9C') +
+  labs(x='Phone as Status Object',y='Counts') +
+  theme_stata() +
+  facet_wrap(~System)
+```
+
+Compared to Android users, iPhone users tend to consider their mobile phone as a status object.
+
+## Socioeconomic Status
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=as.factor(EcoStatus))) +
+  geom_bar(color='black',fill='#159A9C') +
+  labs(x='Socioeconomic Status',y='Counts') +
+  theme_stata()
+```
+
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=as.factor(EcoStatus),y=Age)) +
+  geom_boxplot() +
+  labs(x='Socioeconomic Status') +
+  theme_stata()
+```
+
+The relationship between age and socioeconomic status is not clear. But we can notice that high socioeconomic status (9 and 10) are mainly occupied by people age between 30 and 50.
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=as.factor(EcoStatus))) +
+  geom_bar(color='black',fill='#159A9C') +
+  labs(x='Socioeconomic Status',y='Counts') +
+  theme_stata() +
+  facet_wrap(~System)
+```
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=as.factor(EcoStatus))) +
+  geom_bar(color='black',fill='#159A9C') +
+  labs(x='Socioeconomic Status',y='Counts') +
+  theme_stata() +
+  facet_wrap(~Gender)
+```
+
+## Time owned current phone
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=TimeOwnedPhone)) +
+  geom_histogram(binwidth=2,color='black',fill='#159A9C') +
+  theme_stata() +
+  scale_x_continuous(breaks=seq(0,100,by=10)) +
+  labs(x='Months Owned Current Phone',y='Counts')
+```
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=TimeOwnedPhone)) +
+  geom_histogram(binwidth=5,color='black',fill='#159A9C') +
+  theme_stata() +
+  facet_wrap(~System) +
+  labs(x='Months Owned Current Phone',y='Counts')
+```
+
+The distributions of the length of phone usage time is similar between different systems, except for the outlier, let's exclude the outlier.
+
+```{r}
+smphUsers=smphUsers %>% 
+  filter(TimeOwnedPhone<50)
+```
+
+We excluded one person from the data.
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=TimeOwnedPhone)) +
+  geom_histogram(binwidth=2,color='black',fill='#159A9C') +
+  theme_stata() +
+  scale_x_continuous(breaks=seq(0,50,by=5)) +
+  labs(x='Months Owned Current Phone',y='Counts')
+```
+
+```{r}
+smphUsers %>% 
+  ggplot(aes(x=TimeOwnedPhone)) +
+  geom_histogram(binwidth=5,color='black',fill='#159A9C') +
+  theme_stata() +
+  facet_wrap(~System) +
+  labs(x='Months Owned Current Phone',y='Counts')
+```
+
+# Clustering
+
+## K-means
+
+Standardization
+
+```{r}
+Users=smphUsers %>% 
+  mutate(iPhone=ifelse(System=='iPhone',1,0),
+         Male=ifelse(Gender=='Male',1,0),.after='Gender')
+```
+
+```{r}
+Users_std=as.data.frame(lapply(Users[3:15],scale))
+```
+
+Apply k-means
+
+```{r}
+fviz_nbclust(Users_std,kmeans,method='wss')
+```
+
+Slope decreases after 5 or 6 clusters.
+
+Calculating kmeans for 5 clusters
+
+```{r}
+set.seed(123)
+Users_kmeans=kmeans(Users_std,5)
+```
+
+Visualize the cluster
+
+```{r}
+fviz_cluster(Users_kmeans,data=Users_std,
+             ellipse=F,palette='jco',
+             geom='point', show.clust.cent = F,
+             ggtheme=theme_bw(base_line_size=0),
+             main=NULL)
+```
+
+Evaluate performance
+
+```{r}
+Users_kmeans$size
+Users_kmeans$centers
+```
+
+```{r}
+Users$Cluster=Users_kmeans$cluster
+```
+
+```{r}
+aggregate(data=Users, iPhone~Cluster, mean)
+```
+
+```{r}
+aggregate(data=Users, Male~Cluster, mean)
+```
+
+```{r, warning=FALSE}
+data.frame(cluster=rownames(Users_kmeans$centers),
+           Users_kmeans$centers) %>% 
+  melt() %>% 
+  ggplot(aes(x=variable,y=value,fill = value > 0)) +
+  geom_bar(width=0.8,stat='identity') +
+  labs(x=NULL,y=NULL) +
+  facet_wrap(~cluster) +
+  coord_flip() +
+  theme_bw(base_line_size = 0) +
+  theme(panel.border = element_rect(colour = "black", fill=NA), 
+        legend.position="none",text=element_text(size=10)) +
+  scale_fill_manual(values=c('#B4BEC9','#002333'))
+```
+
+Cluster 1 and 3 are mainly iPhone users (74.53% and 92.97% respectively), Cluster 1 contains iPhone users who strongly consider their phone as status object with extremely low level of Honesty-Humility, Agreeableness and Consientiousness, while Cluster 3 contains iPhone users who have a high level of Emotionality and Consientiousness, people in Cluster 3 also tend to consider their phone as status object. In both Cluster 1 and 3, people do not tend to avoid similarity and have a low level of Openness, moreover, most of them are young generations and females.
+
+Cluster 2,4 and 5 are mainly Android users (all around 62%). Cluster 2 contains Android users who have a high level of Emotionality and low level of socioeonomic status and low level of Extraversion and contains more females. Cluster 4 contains people who tend to use their mobile phone for a long time and have a high level of socioeconomic status, and they are older, and have a high level of Extraversion. Cluster 5 mainly contains males(99.07%).
+People in Cluster 2 and 4 tend to have a high level of Honesty-Hunility and do not consider their phone as status object.
+People in Cluster 4 and 5 tend to avoid similarity and have a low level of Emotionality
+
+
+Calculating kmeans for 2 clusters
+
+```{r}
+set.seed(123)
+Users_kmeans=kmeans(Users_std,6)
+```
+
+Visualize the cluster
+
+```{r}
+fviz_cluster(Users_kmeans,data=Users_std,
+             ellipse=F,palette='jco',
+             geom='point', show.clust.cent = F,
+             ggtheme=theme_bw(base_line_size=0),
+             main=NULL)
+```
+
+Evaluate performance
+
+```{r}
+Users_kmeans$size
+Users_kmeans$centers
+```
+
+```{r}
+Users$Cluster=Users_kmeans$cluster
+```
+
+```{r}
+aggregate(data=Users, iPhone~Cluster, mean)
+```
+
+```{r}
+aggregate(data=Users, Male~Cluster, mean)
+```
+
+```{r, warning=FALSE}
+data.frame(cluster=rownames(Users_kmeans$centers),
+           Users_kmeans$centers) %>% 
+  melt() %>% 
+  ggplot(aes(x=variable,y=value,fill = value > 0)) +
+  geom_bar(width=0.8,stat='identity') +
+  labs(x=NULL,y=NULL) +
+  facet_wrap(~cluster) +
+  coord_flip() +
+  theme_bw(base_line_size = 0) +
+  theme(panel.border = element_rect(colour = "black", fill=NA), 
+        legend.position="none") +
+  scale_fill_manual(values=c('#B4BEC9','#002333'))
+```
+
+## Hierarchical Clustering
+
+Apply the model
+
+```{r}
+User_hie=Users_std %>% 
+  dist(method='euclidean') %>% 
+  hclust(method='centroid')
+```
+
+```{r}
+summary(User_hie)
+```
+
+
+Visualize the model with dendrogram
+
+```{r}
+fviz_dend(User_hie,cex=0.5,k=5,k_colors = 'grey',
+          color_labels_by_k = T,rect=F)
+```
+
+What a mess! This data is too large to implement Hierarchical Clustering.
+
+# Classification
+
+## Including all variables
+
+### Split the data
+
+```{r}
+Users=Users %>% 
+  select(System,4:15)
+
+set.seed(123)
+Users.split=initial_split(Users,prop=0.75)
+```
+
+### Define a recipe
+
+```{r}
+Users.recipe=recipe(System~.,data=Users) %>% 
+  step_normalize(all_numeric())
+```
+
+```{r}
+Users.train=Users.recipe %>% 
+  prep(training(Users.split)) %>% 
+  juice
+```
+
+### Define models
+
+k-Nearest Neighbors
+
+```{r}
+Users.knn.str=nearest_neighbor() %>% 
+  set_args(neighbors=tune(),
+           weight_func=tune(),
+           dist_power=tune()) %>% 
+  set_engine('kknn') %>% 
+  set_mode('classification')
+```
+
+Naive Bayes
+
+```{r}
+Users.nb.str=naive_Bayes() %>% 
+  set_args(Laplace=tune(),
+           smoothness=tune()) %>% 
+  set_engine('naivebayes') %>% 
+  set_mode('classification')
+```
+
+Random Forest
+
+```{r}
+Users.rf.str=rand_forest() %>% 
+  set_args(mtry=tune(),
+           trees=tune(),
+           min_n=tune()) %>% 
+  set_engine('ranger') %>% 
+  set_mode('classification')
+```
+
+### Define Workflow
+
+```{r}
+Users.knn.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.knn.str)
+
+Users.nb.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.nb.str)
+
+Users.rf.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.rf.str)
+```
+
+### Tune parameters
+
+```{r}
+tune_cv=vfold_cv(Users.train) #cross-valication
+```
+
+#### KNN
+
+```{r}
+tune.knn.grid=grid_regular(neighbors(),weight_func(),
+                           dist_power(),levels=5)
+
+Users.knn.results=Users.knn.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.knn.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.knn.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.knn.tuned=Users.knn.results %>% 
+  select_best(metric='roc_auc')
+Users.knn.tuned
+```
+
+Test the model
+
+```{r}
+Users.knn.workflow=Users.knn.workflow %>% 
+  finalize_workflow(Users.knn.tuned)
+
+Users.knn.fit=Users.knn.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.knn.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.knn.predictions=Users.knn.fit %>% 
+  collect_predictions()
+
+Users.knn.predictions
+
+confusionMatrix(Users.knn.predictions$.pred_class,
+                Users.knn.predictions$System)
+```
+
+#### Naive Bayes
+
+```{r}
+tune.nb.grid=grid_regular(Laplace(),smoothness(),levels=5)
+
+Users.nb.results=Users.nb.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.nb.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.nb.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.nb.tuned=Users.nb.results %>% 
+  select_best(metric='roc_auc')
+Users.nb.tuned
+```
+
+Test the model
+
+```{r}
+Users.nb.workflow=Users.nb.workflow %>% 
+  finalize_workflow(Users.nb.tuned)
+
+Users.nb.fit=Users.nb.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.nb.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.nb.predictions=Users.nb.fit %>% 
+  collect_predictions()
+
+Users.nb.predictions
+
+confusionMatrix(Users.nb.predictions$.pred_class,
+                Users.nb.predictions$System)
+```
+
+### Random Forest
+
+```{r}
+tune.rf.grid=expand.grid(mtry=c(1,3,5,7,9),
+                          trees=c(100,500,1000),min_n=c(5,10))
+
+Users.rf.results=Users.rf.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.rf.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.rf.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.rf.tuned=Users.rf.results %>% 
+  select_best(metric='roc_auc')
+Users.rf.tuned
+```
+
+Test the model
+
+```{r}
+Users.rf.workflow=Users.rf.workflow %>% 
+  finalize_workflow(Users.rf.tuned)
+
+Users.rf.fit=Users.rf.workflow %>% 
+  last_fit(Users.split)
+```
+
+```{r}
+summary(Users.rf.fit)
+```
+
+Evaluate the model
+
+```{r}
+Users.rf.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.rf.predictions=Users.rf.fit %>% 
+  collect_predictions()
+
+Users.rf.predictions
+
+confusionMatrix(Users.rf.predictions$.pred_class,
+                Users.rf.predictions$System)
+```
+
+## Trim variables based on descriptive analysis
+
+According to the descriptive analysis and clustering process, females tend to use iPhone while more males prefer Android. Younger generations prefer iPhone. The patterns of HECO in HEXACO factors' distributions are different between different systems. iPhone users are much more likely to neglect what smartphone the majority people are using. iPhone users tend to consider their mobile phone as a status object.
+
+Therefore, we need to take Gender, Age, H, E, C, O, Avoidance Similarity and Phone as Status Object into consideration.
+
+# Test using logistic regression
+
+```{r}
+Users.logR=glm(System ~ Male+Age+H+E+X+A+C+O+AvoidSimilar+StatusObject
+               +EcoStatus+TimeOwnedPhone,family=binomial,Users)
+
+summary(Users.logR)
+```
+
+According to p-value, significant variables include: Gender, H, Avoidance Similarity and Phone as status object.
+
+So, we will test 2 variable sets:
+Intersection: Gender, H, Avoidance Similarity and Phone as status object.
+Union: Gender, Age, H, E, C, O, Avoidance Similarity and Phone as status object.
+
+```{r}
+set.seed(123)
+data.split=initial_split(Users,prop=0.75)
+
+data.recipe=training(data.split) %>% 
+  recipe(System~.) %>% 
+  prep()
+
+data.test=data.recipe %>% 
+  bake(testing(data.split))
+
+data.train=juice(data.recipe)
+
+Users.logR.all=glm(System ~ Male+Age+H+E+X+A+C+O+AvoidSimilar
+                   +StatusObject+EcoStatus+TimeOwnedPhone,
+                   family=binomial,data.train)
+
+summary(Users.logR.all)
+
+prediction=predict(Users.logR.all,data.test,type='response')
+
+predicts=ifelse(prediction>0.5,'iPhone','Android')
+
+confusionMatrix(as.factor(predicts),
+                data.test$System)
+
+roc(data.test$System ~ prediction) %>% 
+  auc()
+```
+
+Performance of logistic regression with all variables.
+
+
+```{r}
+Users_trim=Users %>% 
+  select(System, Male, H, AvoidSimilar, StatusObject)
+
+set.seed(123)
+data.split=initial_split(Users_trim,prop=0.75)
+
+data.recipe=training(data.split) %>% 
+  recipe(System~.) %>% 
+  prep()
+
+data.test=data.recipe %>% 
+  bake(testing(data.split))
+
+data.train=juice(data.recipe)
+
+Users.logR.trim=glm(System ~ Male+H+AvoidSimilar+StatusObject,
+                   family=binomial,data.train)
+
+summary(Users.logR.trim)
+
+prediction=predict(Users.logR.trim,data.test,type='response')
+
+predicts=ifelse(prediction>0.5,'iPhone','Android')
+
+confusionMatrix(as.factor(predicts),
+                data.test$System)
+
+roc(data.test$System ~ prediction) %>% 
+  auc()
+```
+
+```{r}
+Users_trim=Users %>% 
+  select(System, Male, Age, H, E, C, AvoidSimilar, StatusObject)
+
+set.seed(123)
+data.split=initial_split(Users_trim,prop=0.75)
+
+data.recipe=training(data.split) %>% 
+  recipe(System~.) %>% 
+  prep()
+
+data.test=data.recipe %>% 
+  bake(testing(data.split))
+
+data.train=juice(data.recipe)
+
+Users.logR.all=glm(System ~ Male+Age+H+E+C+AvoidSimilar
+                   +StatusObject,
+                   family=binomial,data.train)
+
+summary(Users.logR.all)
+
+prediction=predict(Users.logR.all,data.test,type='response')
+
+predicts=ifelse(prediction>0.5,'iPhone','Android')
+
+confusionMatrix(as.factor(predicts),
+                data.test$System)
+
+roc(data.test$System ~ prediction) %>% 
+  auc()
+```
+
+# Intersection
+
+```{r}
+Users_Inter=Users %>% 
+  select(System,Male,H,AvoidSimilar,StatusObject)
+```
+
+## Split the data
+
+```{r}
+set.seed(123)
+Users.split=initial_split(Users_Inter,prop=0.75)
+```
+
+## Define a recipe
+
+```{r}
+Users.recipe=recipe(System~.,data=Users_Inter) %>% 
+  step_normalize(all_numeric())
+```
+
+```{r}
+Users.train=Users.recipe %>% 
+  prep(training(Users.split)) %>% 
+  juice
+```
+
+## Define models
+
+k-Nearest Neighbors
+
+```{r}
+Users.knn.str=nearest_neighbor() %>% 
+  set_args(neighbors=tune(),
+           weight_func=tune(),
+           dist_power=tune()) %>% 
+  set_engine('kknn') %>% 
+  set_mode('classification')
+```
+
+Naive Bayes
+
+```{r}
+Users.nb.str=naive_Bayes() %>% 
+  set_args(Laplace=tune(),
+           smoothness=tune()) %>% 
+  set_engine('naivebayes') %>% 
+  set_mode('classification')
+```
+
+Random Forest
+
+```{r}
+Users.rf.str=rand_forest() %>% 
+  set_args(mtry=tune(),
+           trees=tune(),
+           min_n=tune()) %>% 
+  set_engine('ranger') %>% 
+  set_mode('classification')
+```
+
+## Define Workflow
+
+```{r}
+Users.knn.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.knn.str)
+
+Users.nb.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.nb.str)
+
+Users.rf.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.rf.str)
+```
+
+## Tune parameters
+
+```{r}
+tune_cv=vfold_cv(Users.train) #cross-valication
+```
+
+### KNN
+
+```{r}
+tune.knn.grid=grid_regular(neighbors(),weight_func(),
+                           dist_power(),levels=5)
+
+Users.knn.results=Users.knn.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.knn.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.knn.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.knn.tuned=Users.knn.results %>% 
+  select_best(metric='roc_auc')
+Users.knn.tuned
+```
+
+Test the model
+
+```{r}
+Users.knn.workflow=Users.knn.workflow %>% 
+  finalize_workflow(Users.knn.tuned)
+
+Users.knn.fit=Users.knn.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.knn.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.knn.predictions=Users.knn.fit %>% 
+  collect_predictions()
+
+Users.knn.predictions
+
+confusionMatrix(Users.knn.predictions$.pred_class,
+                Users.knn.predictions$System)
+```
+
+## Naive Bayes
+
+```{r}
+tune.nb.grid=grid_regular(Laplace(),smoothness(),levels=5)
+
+Users.nb.results=Users.nb.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.nb.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.nb.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.nb.tuned=Users.nb.results %>% 
+  select_best(metric='roc_auc')
+Users.nb.tuned
+```
+
+Test the model
+
+```{r}
+Users.nb.workflow=Users.nb.workflow %>% 
+  finalize_workflow(Users.nb.tuned)
+
+Users.nb.fit=Users.nb.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.nb.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.nb.predictions=Users.nb.fit %>% 
+  collect_predictions()
+
+Users.nb.predictions
+
+confusionMatrix(Users.nb.predictions$.pred_class,
+                Users.nb.predictions$System)
+```
+
+## Random Forest
+
+```{r}
+tune.rf.grid=expand.grid(mtry=c(1,2,3,4),
+                          trees=c(100,500,1000),min_n=c(5,10))
+
+set.seed(123)
+
+Users.rf.results=Users.rf.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.rf.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.rf.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.rf.tuned=Users.rf.results %>% 
+  select_best(metric='roc_auc')
+Users.rf.tuned
+```
+
+Test the model
+
+```{r}
+Users.rf.workflow=Users.rf.workflow %>% 
+  finalize_workflow(Users.rf.tuned)
+
+Users.rf.fit=Users.rf.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.rf.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.rf.predictions=Users.rf.fit %>% 
+  collect_predictions()
+
+Users.rf.predictions
+
+confusionMatrix(Users.rf.predictions$.pred_class,
+                Users.rf.predictions$System)
+```
+
+
+# Union
+
+```{r}
+Users_Uni=Users %>% 
+  select(System,Male,Age,H,E,C,AvoidSimilar,StatusObject)
+```
+
+## Split the data
+
+```{r}
+set.seed(123)
+Users.split=initial_split(Users_Uni,prop=0.75)
+```
+
+## Define a recipe
+
+```{r}
+Users.recipe=recipe(System~.,data=Users_Uni) %>% 
+  step_normalize(all_numeric())
+```
+
+```{r}
+Users.train=Users.recipe %>% 
+  prep(training(Users.split)) %>% 
+  juice
+```
+
+## Define models
+
+k-Nearest Neighbors
+
+```{r}
+Users.knn.str=nearest_neighbor() %>% 
+  set_args(neighbors=tune(),
+           weight_func=tune(),
+           dist_power=tune()) %>% 
+  set_engine('kknn') %>% 
+  set_mode('classification')
+```
+
+Naive Bayes
+
+```{r}
+Users.nb.str=naive_Bayes() %>% 
+  set_args(Laplace=tune(),
+           smoothness=tune()) %>% 
+  set_engine('naivebayes') %>% 
+  set_mode('classification')
+```
+
+Random Forest
+
+```{r}
+Users.rf.str=rand_forest() %>% 
+  set_args(mtry=tune(),
+           trees=tune(),
+           min_n=tune()) %>% 
+  set_engine('ranger') %>% 
+  set_mode('classification')
+```
+
+## Define Workflow
+
+```{r}
+Users.knn.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.knn.str)
+
+Users.nb.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.nb.str)
+
+Users.rf.workflow=workflow() %>% 
+  add_recipe(Users.recipe) %>% 
+  add_model(Users.rf.str)
+```
+
+## Tune parameters
+
+```{r}
+tune_cv=vfold_cv(Users.train) #cross-valication
+```
+
+### KNN
+
+```{r}
+tune.knn.grid=grid_regular(neighbors(),weight_func(),
+                           dist_power(),levels=5)
+
+Users.knn.results=Users.knn.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.knn.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.knn.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.knn.tuned=Users.knn.results %>% 
+  select_best(metric='roc_auc')
+Users.knn.tuned
+```
+
+Test the model
+
+```{r}
+Users.knn.workflow=Users.knn.workflow %>% 
+  finalize_workflow(Users.knn.tuned)
+
+Users.knn.fit=Users.knn.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.knn.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.knn.predictions=Users.knn.fit %>% 
+  collect_predictions()
+
+Users.knn.predictions
+
+confusionMatrix(Users.knn.predictions$.pred_class,
+                Users.knn.predictions$System)
+```
+
+### Naive Bayes
+
+```{r}
+tune.nb.grid=grid_regular(Laplace(),smoothness(),levels=5)
+
+Users.nb.results=Users.nb.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.nb.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.nb.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.nb.tuned=Users.nb.results %>% 
+  select_best(metric='roc_auc')
+Users.nb.tuned
+```
+
+```{r}
+Users.nb.best=naive_Bayes() %>% 
+  set_args(smoothness=1.5,
+           Laplace=0) %>% 
+  set_engine('naivebayes') %>% 
+  set_mode('classification') %>% 
+  fit(System~.,data=Users.train)
+```
+
+```{r}
+Users.nb.best
+summary(Users.nb.best)
+```
+
+
+Test the model
+
+```{r}
+Users.nb.workflow=Users.nb.workflow %>% 
+  finalize_workflow(Users.nb.tuned)
+
+Users.nb.fit=Users.nb.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.nb.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.nb.predictions=Users.nb.fit %>% 
+  collect_predictions()
+
+Users.nb.predictions
+
+confusionMatrix(Users.nb.predictions$.pred_class,
+                Users.nb.predictions$System)
+```
+
+### Random Forest
+
+```{r}
+tune.rf.grid=expand.grid(mtry=c(1,2,3,5,7),
+                          trees=c(100,500,1000),min_n=c(5,10))
+
+set.seed(123)
+
+Users.rf.results=Users.rf.workflow %>% 
+  tune_grid(resamples=tune_cv,
+            grid=tune.rf.grid,
+            metrics=metric_set(accuracy,roc_auc))
+```
+
+```{r}
+Users.rf.results %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.rf.tuned=Users.rf.results %>% 
+  select_best(metric='roc_auc')
+Users.rf.tuned
+```
+
+```{r}
+set.seed(123)
+
+Users.rf.best=rand_forest() %>% 
+  set_args(mtry=1,trees=100,min_n=10) %>% 
+  set_engine('ranger') %>% 
+  set_mode('classification') %>% 
+  fit(System~.,data=Users.train)
+```
+
+```{r}
+Users.rf.best
+summary(Users.rf.best)
+```
+
+
+Test the model
+
+```{r}
+Users.rf.workflow=Users.rf.workflow %>% 
+  finalize_workflow(Users.rf.tuned)
+
+Users.rf.fit=Users.rf.workflow %>% 
+  last_fit(Users.split)
+```
+
+Evaluate the model
+
+```{r}
+Users.rf.fit %>% 
+  collect_metrics()
+```
+
+```{r}
+Users.rf.predictions=Users.rf.fit %>% 
+  collect_predictions()
+
+Users.rf.predictions
+
+confusionMatrix(Users.rf.predictions$.pred_class,
+                Users.rf.predictions$System)
+```
+
+
+## SVM
+
+As we can see, models about show poor performance (almost all AUC under 0.7).
+This dataset maybe too small to fit these models, we need to try SVM, which fits small learning data
+
+```{r}
+#split the data
+set.seed(123)
+Users.all.split=initial_split(Users,prop=0.75)
+
+#recipe
+SVM.recipe=recipe(System~.,data=Users) %>% 
+  step_normalize(all_numeric())
+
+SVM.train=SVM.recipe %>% 
+  prep(training(Users.all.split)) %>% 
+  juice()
+
+#model structure
+Users.SVM=svm_poly() %>% 
+  set_args(cost=tune(),
+           degree=tune(),
+           scale_factor=tune(),
+           margin=tune()) %>% 
+  set_engine('kernlab') %>% 
+  set_mode('classification')
+
+#workflow
+SVM.workflow=workflow() %>% 
+  add_recipe(SVM.recipe) %>% 
+  add_model(Users.SVM)
+
+#tune parameters
+SVM.cv=vfold_cv(SVM.train)
+
+SVM.grid=expand_grid(cost=c(1,1.5,2),
+                     degree=c(1,3,5),
+                     scale_factor=c(1,1.5,2),
+                     margin=c(0.1,0.3,0.5))
+
+SVM.tune.results=SVM.workflow %>% 
+  tune_grid(resamples=SVM.cv,
+            grid=SVM.grid,
+            metrics=metric_set(accuracy,roc_auc))
+
+SVM.final=SVM.tune.results %>% 
+  select_best(metric='roc_auc')
+
+SVM.final
+
+SVM.workflow=SVM.workflow %>% 
+  finalize_workflow(SVM.final)
+
+#test and evaluate
+SVM.fit=SVM.workflow %>% 
+  last_fit(Users.all.split)
+
+SVM.fit %>% collect_metrics()
+
+SVM.predictions=SVM.fit %>% collect_predictions()
+confusionMatrix(SVM.predictions$.pred_class,
+                SVM.predictions$System)
+```
+
+```{r}
+#split the data
+set.seed(123)
+Users.inter.split=initial_split(Users_Inter,prop=0.75)
+
+#recipe
+SVM.recipe=training(Users.inter.split) %>% 
+  recipe(System~.) %>% 
+  step_normalize(all_numeric()) %>% 
+  prep()
+
+SVM.train=juice(SVM.recipe)
+SVM.test=SVM.recipe %>% 
+  bake(testing(Users.inter.split))
+
+#modelling
+Users.SVM=svm_poly() %>% 
+  set_engine('kernlab') %>% 
+  set_mode('classification') %>% 
+  fit(System~.,data=SVM.train)
+
+#test and evaluate
+SVM.pre=Users.SVM %>% 
+  predict(SVM.test) %>% 
+  bind_cols(SVM.test)
+
+SVM.pre %>% 
+  metrics(truth=System,estimate=.pred_class)
+
+Users.SVM %>%
+  predict(SVM.test,type='prob') %>% 
+  bind_cols(SVM.test) %>% 
+  roc_auc(System,.pred_Android)
+
+confusionMatrix(SVM.pre$.pred_class,
+                SVM.pre$System)
+
+```
+
+```{r}
+#split the data
+set.seed(123)
+Users.uni.split=initial_split(Users_Uni,prop=0.75)
+
+#recipe
+SVM.recipe=training(Users.uni.split) %>% 
+  recipe(System~.) %>% 
+  step_normalize(all_numeric()) %>% 
+  prep()
+
+SVM.train=juice(SVM.recipe)
+SVM.test=SVM.recipe %>% 
+  bake(testing(Users.uni.split))
+
+#modelling
+Users.SVM=svm_poly() %>% 
+  set_engine('kernlab') %>% 
+  set_mode('classification') %>% 
+  fit(System~.,data=SVM.train)
+
+#test and evaluate
+SVM.pre=Users.SVM %>% 
+  predict(SVM.test) %>% 
+  bind_cols(SVM.test)
+
+SVM.pre %>% 
+  metrics(truth=System,estimate=.pred_class)
+
+Users.SVM %>%
+  predict(SVM.test,type='prob') %>% 
+  bind_cols(SVM.test) %>% 
+  roc_auc(System,.pred_Android)
+
+confusionMatrix(SVM.pre$.pred_class,
+                SVM.pre$System)
+
+```
+
+Still not so good.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
