@@ -4,7 +4,7 @@
 
 The electricity load data come from [the ENTSO-E Transparency Platform](https://transparency.entsoe.eu/dashboard/show).
 
-The weather data come from [a historical weather website](rp5.ru).
+The weather data come from [a historical weather website](https://rp5.ru/).
 
 Most of the works are done _independently_ by myself.
 
