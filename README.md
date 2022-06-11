@@ -2,7 +2,9 @@
 
 🌱 I’m currently studying Business Analytics course at the **University of Bath**. This repository consists of **courseworks** through the programme.
 
-Original datasets are provided by _professors_ from the UoB.
+The electricity load data come from  the ENTSO-E Transparency Platform[https://transparency.entsoe.eu/dashboard/show].
+
+The weather data come from a historical weather website[rp5.ru].
 
 Most of the works are done _independently_ by myself.
 
